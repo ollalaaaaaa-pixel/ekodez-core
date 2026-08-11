@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { Layout, Menu, Typography, Card } from 'antd'
 import {
   DollarOutlined,
@@ -8,6 +8,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons'
 import FinancePage from './FinancePage'
+import LeadsPage from './LeadsPage'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -52,6 +53,8 @@ export default function App() {
         <Content style={{ margin: 24 }}>
           {current === 'finance' ? (
             <FinancePage />
+          ) : current === 'leads' ? (
+            <LeadsPage />
           ) : (
             <Card>
               <p>Экран "{screens[current]}" готовится. Данные появятся после подключения модуля.</p>
