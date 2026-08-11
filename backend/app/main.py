@@ -1,5 +1,5 @@
 import os
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from dotenv import load_dotenv
@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
-from app.models import Transaction
+from app.lead_parser import parse_order_text
+from app.models import Lead, Transaction
 
 load_dotenv()
 
@@ -61,6 +62,33 @@ class FinanceSummary(BaseModel):
 class ClassifyIn(BaseModel):
     kind: str
     review_required: bool = False
+
+
+class LeadOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    source: str
+    external_id: str | None
+    order_at: datetime | None
+    client_name: str | None
+    phone: str | None
+    address: str | None
+    area: str | None
+    reason: str | None
+    comment: str | None
+    amount_note: str | None
+    contract: str | None
+    partner: str | None
+    status: str
+
+
+class RawTextIn(BaseModel):
+    text: str
+
+
+class LeadStatusIn(BaseModel):
+    status: str
 
 
 @app.get("/health")
@@ -131,3 +159,55 @@ def finance_summary():
         return FinanceSummary(
             income=income, expense=expense, review_count=review_count
         )
+
+
+@app.get("/api/leads", response_model=list[LeadOut])
+def list_leads():
+    with Session(engine) as session:
+        return session.scalars(select(Lead).order_by(Lead.id.desc())).all()
+
+
+@app.post("/api/leads/ingest", response_model=LeadOut)
+def ingest_lead(payload: RawTextIn):
+    data = parse_order_text(payload.text)
+    with Session(engine) as session:
+        if data["external_id"]:
+            existing = session.scalar(
+                select(Lead).where(Lead.external_id == data["external_id"])
+            )
+            if existing is not None:
+                return existing
+        row = Lead(
+            source="telegram",
+            external_id=data["external_id"] or None,
+            order_at=data["order_at"],
+            client_name=data["client_name"] or None,
+            phone=data["phone"] or None,
+            address=data["address"] or None,
+            area=data["area"] or None,
+            reason=data["reason"] or None,
+            comment=data["comment"] or None,
+            amount_note=data["amount_note"] or None,
+            contract=data["contract"] or None,
+            partner=data["partner"] or None,
+            status="new",
+            raw_text=payload.text,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+@app.post("/api/leads/{lead_id}/status", response_model=LeadOut)
+def set_lead_status(lead_id: int, payload: LeadStatusIn):
+    if payload.status not in ("new", "in_work", "done", "cancelled"):
+        raise HTTPException(status_code=422, detail="bad status")
+    with Session(engine) as session:
+        row = session.get(Lead, lead_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        row.status = payload.status
+        session.commit()
+        session.refresh(row)
+        return row
