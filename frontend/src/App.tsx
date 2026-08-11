@@ -7,6 +7,7 @@ import {
   RobotOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
+import FinancePage from './FinancePage'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -49,9 +50,13 @@ export default function App() {
           </Title>
         </Header>
         <Content style={{ margin: 24 }}>
-          <Card>
-            <p>Экран "{screens[current]}" готовится. Данные появятся после подключения модуля.</p>
-          </Card>
+          {current === 'finance' ? (
+            <FinancePage />
+          ) : (
+            <Card>
+              <p>Экран "{screens[current]}" готовится. Данные появятся после подключения модуля.</p>
+            </Card>
+          )}
         </Content>
       </Layout>
     </Layout>
