@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, func, select, text
@@ -58,6 +58,11 @@ class FinanceSummary(BaseModel):
     review_count: int
 
 
+class ClassifyIn(BaseModel):
+    kind: str
+    review_required: bool = False
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -85,6 +90,21 @@ def create_transaction(payload: TransactionIn):
     with Session(engine) as session:
         row = Transaction(**payload.model_dump())
         session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+@app.post("/api/transactions/{tx_id}/classify", response_model=TransactionOut)
+def classify_transaction(tx_id: int, payload: ClassifyIn):
+    if payload.kind not in ("income", "expense", "own_transfer", "unknown"):
+        raise HTTPException(status_code=422, detail="bad kind")
+    with Session(engine) as session:
+        row = session.get(Transaction, tx_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        row.kind = payload.kind
+        row.review_required = payload.review_required
         session.commit()
         session.refresh(row)
         return row

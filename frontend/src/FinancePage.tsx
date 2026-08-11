@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { Card, Col, Row, Statistic, Table, Tag, Typography } from 'antd'
+import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, EyeOutlined } from '@ant-design/icons'
 
 const API = 'http://127.0.0.1:8000'
@@ -34,7 +34,7 @@ export default function FinancePage() {
   const [rows, setRows] = useState<Tx[]>([])
   const [error, setError] = useState('')
 
-  useEffect(() => {
+  const load = () => {
     fetch(API + '/api/finance/summary')
       .then((r) => r.json())
       .then(setSummary)
@@ -43,7 +43,19 @@ export default function FinancePage() {
       .then((r) => r.json())
       .then(setRows)
       .catch(() => setError('Бэкенд недоступен. Запусти uvicorn.'))
+  }
+
+  useEffect(() => {
+    load()
   }, [])
+
+  const classify = (id: number, kind: string) => {
+    fetch(API + '/api/transactions/' + id + '/classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: kind, review_required: false }),
+    }).then(() => load())
+  }
 
   const columns = [
     { title: 'Дата', dataIndex: 'operation_date', key: 'date' },
@@ -77,6 +89,21 @@ export default function FinancePage() {
         ) : (
           <Tag color="green">Проведено</Tag>
         ),
+    },
+    {
+      title: 'Действие',
+      key: 'actions',
+      render: (_: unknown, r: Tx) =>
+        r.review_required ? (
+          <Space>
+            <Button size="small" type="primary" onClick={() => classify(r.id, 'income')}>
+              Доход
+            </Button>
+            <Button size="small" danger onClick={() => classify(r.id, 'expense')}>
+              Расход
+            </Button>
+          </Space>
+        ) : null,
     },
   ]
 
