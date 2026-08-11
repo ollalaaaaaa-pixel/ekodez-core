@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.lead_parser import parse_order_text
 from app.models import Lead, Transaction
+from app.tg_poller import start_poller
 
 load_dotenv()
 
@@ -26,6 +27,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _start_telegram_poller() -> None:
+    start_poller(engine)
 
 
 class TransactionIn(BaseModel):

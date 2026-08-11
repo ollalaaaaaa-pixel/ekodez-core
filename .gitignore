@@ -4,3 +4,4 @@ __pycache__/
 .env
 node_modules/
 dist/
+tg_offset.json
