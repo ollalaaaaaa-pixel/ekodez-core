@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import urllib.request
 
 from sqlalchemy import select
@@ -58,6 +59,7 @@ def _ingest(engine, text: str) -> None:
         )
         session.add(row)
         session.commit()
+        print(f"lead ingested: {data['external_id']}")
 
 
 def _loop(token: str, engine) -> None:
@@ -72,7 +74,10 @@ def _loop(token: str, engine) -> None:
             )
             with urllib.request.urlopen(url, timeout=15) as r:
                 payload = json.loads(r.read().decode("utf-8"))
-            for update in payload.get("result", []):
+            updates = payload.get("result", [])
+            if updates:
+                print(f"tg updates: {len(updates)}")
+            for update in updates:
                 offset = max(offset, update["update_id"] + 1)
                 msg = update.get("channel_post") or update.get("message") or {}
                 text = msg.get("text") or ""
@@ -80,6 +85,7 @@ def _loop(token: str, engine) -> None:
                     _ingest(engine, text)
             _save_offset(offset)
         except Exception:
+            traceback.print_exc()
             time.sleep(3)
         time.sleep(2)
 
