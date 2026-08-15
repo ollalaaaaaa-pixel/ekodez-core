@@ -82,9 +82,14 @@ export default function LeadsPage() {
       render: (_: unknown, r: Lead) => (
         <Space>
           {r.status === 'new' ? (
-            <Button size="small" type="primary" onClick={() => setStatus(r.id, 'in_work')}>
-              В работу
-            </Button>
+            <>
+              <Button size="small" type="primary" onClick={() => setStatus(r.id, 'in_work')}>
+                В работу
+              </Button>
+              <Button size="small" danger onClick={() => setStatus(r.id, 'cancelled')}>
+                Отмена
+              </Button>
+            </>
           ) : null}
           {r.status === 'in_work' ? (
             <>

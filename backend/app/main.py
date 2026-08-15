@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
+from app.finance_categories import classify_finance
 from app.lead_parser import parse_order_text
 from app.models import Lead, Transaction
 from app.tg_poller import start_poller
@@ -55,6 +56,7 @@ class TransactionOut(BaseModel):
     currency: str
     counterparty: str | None
     description: str | None
+    category: str | None
     kind: str
     review_required: bool
 
@@ -68,6 +70,7 @@ class FinanceSummary(BaseModel):
 class ClassifyIn(BaseModel):
     kind: str
     review_required: bool = False
+    amount: Decimal | None = None
 
 
 class LeadOut(BaseModel):
@@ -122,7 +125,10 @@ def list_transactions():
 @app.post("/api/transactions", response_model=TransactionOut)
 def create_transaction(payload: TransactionIn):
     with Session(engine) as session:
-        row = Transaction(**payload.model_dump())
+        values = payload.model_dump()
+        finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
+        values["category"] = classify_finance(finance_text) or "Прочее"
+        row = Transaction(**values)
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -139,6 +145,10 @@ def classify_transaction(tx_id: int, payload: ClassifyIn):
             raise HTTPException(status_code=404, detail="not found")
         row.kind = payload.kind
         row.review_required = payload.review_required
+        if payload.amount is not None:
+            row.amount = payload.amount
+        finance_text = f"{row.description or ''} {row.counterparty or ''}"
+        row.category = classify_finance(finance_text) or "Прочее"
         session.commit()
         session.refresh(row)
         return row

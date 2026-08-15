@@ -19,6 +19,7 @@ class Transaction(Base):
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
     counterparty: Mapped[str | None] = mapped_column(String(300), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     kind: Mapped[str] = mapped_column(String(20), default="unknown")
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(

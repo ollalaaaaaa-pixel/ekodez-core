@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Button, Card, Col, InputNumber, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, EyeOutlined } from '@ant-design/icons'
 
 const API = 'http://127.0.0.1:8000'
@@ -12,6 +12,7 @@ type Tx = {
   currency: string
   counterparty: string | null
   description: string | null
+  category: string | null
   kind: string
   review_required: boolean
 }
@@ -32,6 +33,7 @@ const kindLabel: Record<string, { text: string; color: string }> = {
 export default function FinancePage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [rows, setRows] = useState<Tx[]>([])
+  const [draftAmounts, setDraftAmounts] = useState<Record<number, string | null>>({})
   const [error, setError] = useState('')
 
   const load = () => {
@@ -50,17 +52,40 @@ export default function FinancePage() {
   }, [])
 
   const classify = (id: number, kind: string) => {
+    const amount = draftAmounts[id]
     fetch(API + '/api/transactions/' + id + '/classify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: kind, review_required: false }),
+      body: JSON.stringify({
+        kind: kind,
+        review_required: false,
+        ...(amount !== undefined && amount !== null ? { amount } : {}),
+      }),
     }).then(() => load())
   }
 
   const columns = [
     { title: 'Дата', dataIndex: 'operation_date', key: 'date' },
-    { title: 'Контрагент', dataIndex: 'counterparty', key: 'cp' },
-    { title: 'Назначение', dataIndex: 'description', key: 'desc' },
+    {
+      title: 'Статья',
+      dataIndex: 'category',
+      key: 'category',
+      render: (category: string | null) => category ?? 'Прочее',
+    },
+    {
+      title: 'Детали',
+      key: 'details',
+      render: (_: unknown, r: Tx) => (
+        <div>
+          <div>{r.description ?? '—'}</div>
+          {r.counterparty ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {r.counterparty}
+            </Typography.Text>
+          ) : null}
+        </div>
+      ),
+    },
     {
       title: 'Тип',
       dataIndex: 'kind',
@@ -96,6 +121,20 @@ export default function FinancePage() {
       render: (_: unknown, r: Tx) =>
         r.review_required ? (
           <Space>
+            <InputNumber
+              aria-label="Сумма операции"
+              min="0"
+              precision={2}
+              stringMode
+              value={draftAmounts[r.id] ?? r.amount}
+              onChange={(value) =>
+                setDraftAmounts((current) => ({
+                  ...current,
+                  [r.id]: value === null ? null : String(value),
+                }))
+              }
+              style={{ width: 120 }}
+            />
             <Button size="small" type="primary" onClick={() => classify(r.id, 'income')}>
               Доход
             </Button>
