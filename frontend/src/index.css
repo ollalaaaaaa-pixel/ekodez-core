@@ -1,3 +1,39 @@
-﻿body {
+body {
   margin: 0;
+}
+
+.app-logo {
+  height: 48px;
+  margin: 16px;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+}
+
+.app-header {
+  padding: 0 24px !important;
+  background: #fff !important;
+}
+
+.app-title {
+  margin: 0 !important;
+  line-height: 64px !important;
+}
+
+.app-content {
+  margin: 24px;
+}
+
+@media (max-width: 767px) {
+  .app-header {
+    padding: 0 12px !important;
+  }
+
+  .app-title {
+    font-size: 17px !important;
+  }
+
+  .app-content {
+    margin: 12px;
+  }
 }

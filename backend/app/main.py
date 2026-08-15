@@ -3,16 +3,21 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
-from app.finance_categories import classify_finance
+from app.finance_categories import (
+    EXPENSE_CATEGORIES_V1,
+    INCOME_CATEGORIES_V1,
+    classify_finance,
+    default_finance_category,
+)
 from app.lead_parser import parse_order_text
 from app.models import Lead, Transaction
-from app.tg_poller import start_poller
+from app.tg_poller import poller_started, start_poller
 
 load_dotenv()
 
@@ -73,6 +78,17 @@ class ClassifyIn(BaseModel):
     amount: Decimal | None = None
 
 
+class DayEntryIn(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    kind: str
+    category: str
+    amount: Decimal
+    comment: str | None = None
+    entered_by: str = "Артем"
+    entry_date: date | None = Field(default=None, alias="date")
+
+
 class LeadOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -102,7 +118,10 @@ class LeadStatusIn(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "telegram": "started" if poller_started() else "stopped",
+    }
 
 
 @app.get("/health/db")
@@ -127,7 +146,9 @@ def create_transaction(payload: TransactionIn):
     with Session(engine) as session:
         values = payload.model_dump()
         finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
-        values["category"] = classify_finance(finance_text) or "Прочее"
+        values["category"] = classify_finance(
+            finance_text
+        ) or default_finance_category(payload.kind)
         row = Transaction(**values)
         session.add(row)
         session.commit()
@@ -148,7 +169,9 @@ def classify_transaction(tx_id: int, payload: ClassifyIn):
         if payload.amount is not None:
             row.amount = payload.amount
         finance_text = f"{row.description or ''} {row.counterparty or ''}"
-        row.category = classify_finance(finance_text) or "Прочее"
+        row.category = classify_finance(finance_text) or default_finance_category(
+            payload.kind
+        )
         session.commit()
         session.refresh(row)
         return row
@@ -175,6 +198,111 @@ def finance_summary():
         return FinanceSummary(
             income=income, expense=expense, review_count=review_count
         )
+
+
+@app.get("/api/day")
+def get_day(day: date = Query(alias="date")):
+    with Session(engine) as session:
+        rows = session.scalars(
+            select(Transaction)
+            .where(
+                Transaction.operation_date == day,
+                Transaction.kind.in_(("income", "expense")),
+                Transaction.review_required == False,
+            )
+            .order_by(Transaction.created_at, Transaction.id)
+        ).all()
+
+        income_total = sum(
+            (row.amount for row in rows if row.kind == "income"), Decimal("0")
+        )
+        expense_total = sum(
+            (row.amount for row in rows if row.kind == "expense"), Decimal("0")
+        )
+        totals = {
+            (kind, category): sum(
+                (
+                    row.amount
+                    for row in rows
+                    if row.kind == kind and row.category == category
+                ),
+                Decimal("0"),
+            )
+            for kind, categories in (
+                ("income", INCOME_CATEGORIES_V1),
+                ("expense", EXPENSE_CATEGORIES_V1),
+            )
+            for category in categories
+        }
+        categories = [
+            {"kind": kind, "category": category, "total": total}
+            for (kind, category), total in totals.items()
+        ]
+        entries = [
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "category": row.category,
+                "amount": row.amount,
+                "description": row.description,
+                "entered_by": row.entered_by,
+                "time": row.created_at.strftime("%H:%M"),
+                "source": row.source,
+                "can_delete": row.source == "manual" and day == date.today(),
+            }
+            for row in rows
+        ]
+        return {
+            "income_total": income_total,
+            "expense_total": expense_total,
+            "balance": income_total - expense_total,
+            "categories": categories,
+            "entries": entries,
+        }
+
+
+@app.post("/api/day/entry", response_model=TransactionOut)
+def create_day_entry(payload: DayEntryIn):
+    categories_by_kind = {
+        "income": INCOME_CATEGORIES_V1,
+        "expense": EXPENSE_CATEGORIES_V1,
+    }
+    if payload.kind not in categories_by_kind:
+        raise HTTPException(status_code=422, detail="bad kind")
+    if payload.category not in categories_by_kind[payload.kind]:
+        raise HTTPException(status_code=422, detail="bad category")
+    if payload.amount < 0:
+        raise HTTPException(status_code=422, detail="bad amount")
+
+    with Session(engine) as session:
+        row = Transaction(
+            source="manual",
+            operation_date=payload.entry_date or date.today(),
+            amount=payload.amount,
+            currency="RUB",
+            description=payload.comment,
+            category=payload.category,
+            entered_by=payload.entered_by,
+            kind=payload.kind,
+            review_required=False,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+
+@app.delete("/api/transactions/{tx_id}")
+def delete_transaction(tx_id: int):
+    with Session(engine) as session:
+        row = session.get(Transaction, tx_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if row.source != "manual" or row.operation_date != date.today():
+            raise HTTPException(status_code=403, detail="deletion is not allowed")
+        session.delete(row)
+        session.commit()
+        return {"status": "deleted", "id": tx_id}
 
 
 @app.get("/api/leads", response_model=list[LeadOut])

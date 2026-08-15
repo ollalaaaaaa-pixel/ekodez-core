@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app import tg_poller
+from app import main
 from app.models import Base, Lead
 
 
@@ -30,6 +31,22 @@ class FakeResponse:
 
 
 class TelegramPollerLoggingTest(unittest.TestCase):
+    def test_health_reports_process_local_poller_state(self):
+        with patch.object(tg_poller, "poller_started", return_value=True):
+            with patch.object(main, "poller_started", tg_poller.poller_started):
+                self.assertEqual(main.health()["telegram"], "started")
+
+    def test_start_poller_sets_started_state_after_thread_start(self):
+        tg_poller._poller_started = False
+        with (
+            patch.dict(tg_poller.os.environ, {"TELEGRAM_BOT_TOKEN": "test-token"}),
+            patch.object(tg_poller.threading, "Thread") as thread_class,
+        ):
+            tg_poller.start_poller(object())
+
+        thread_class.return_value.start.assert_called_once_with()
+        self.assertTrue(tg_poller.poller_started())
+
     def test_ingest_logs_external_id_after_successful_commit(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)

@@ -33,19 +33,19 @@ class FinanceApiTest(unittest.TestCase):
     def test_create_transaction_classifies_combined_description_and_counterparty(self):
         row = main.create_transaction(
             self.transaction_in(
-                description="Chemicals",
+                description="Купил химию",
                 counterparty="Склад",
             )
         )
 
-        self.assertEqual(row.category, "Материалы и химия")
+        self.assertEqual(row.category, "Материалы")
 
     def test_create_transaction_uses_other_when_no_rule_matches(self):
         row = main.create_transaction(
             self.transaction_in(description="Обычная операция")
         )
 
-        self.assertEqual(row.category, "Прочее")
+        self.assertEqual(row.category, "Другое")
 
     def test_classify_recomputes_category_and_updates_optional_amount(self):
         with Session(self.engine) as session:
@@ -74,7 +74,7 @@ class FinanceApiTest(unittest.TestCase):
         self.assertEqual(updated.kind, "expense")
         self.assertFalse(updated.review_required)
         self.assertEqual(updated.amount, Decimal("3500.00"))
-        self.assertEqual(updated.category, "Топливо и транспорт")
+        self.assertEqual(updated.category, "Топливо и машина")
 
 
 if __name__ == "__main__":

@@ -13,12 +13,13 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.finance_categories import classify_finance
+from app.finance_categories import classify_finance, default_finance_category
 from app.lead_parser import parse_order_text
 from app.models import Lead, Transaction
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OFFSET_FILE = os.path.join(BASE_DIR, "tg_offset.json")
+_poller_started = False
 ATTACHMENTS_DIR = os.path.join(BASE_DIR, "attachments")
 
 _AMOUNT_RE = re.compile(
@@ -191,7 +192,7 @@ def _parse_agent_text(text: str) -> tuple[str, Decimal, str]:
         fraction = match.group(2)
         amount = Decimal(whole + ("." + fraction if fraction else ""))
 
-    category = classify_finance(text) or "Прочее"
+    category = classify_finance(text) or default_finance_category(kind)
     return kind, amount, category
 
 
@@ -311,7 +312,7 @@ def _handle_agent_message(token: str, engine, message: dict) -> None:
             description=description,
             kind="unknown",
             amount=Decimal("0.00"),
-            category="Прочее",
+            category="Другое",
         )
         _send_message(
             token,
@@ -432,10 +433,19 @@ def _loop(token: str, engine) -> None:
 
 
 def start_poller(engine) -> None:
+    global _poller_started
+
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
+        _poller_started = False
         print("TG poller: token not set, skip")
         return
     thread = threading.Thread(target=_loop, args=(token, engine), daemon=True)
     thread.start()
+    _poller_started = True
     print("TG poller: started")
+
+
+def poller_started() -> bool:
+    """Вернуть фактический процесс-локальный статус запуска поллера."""
+    return _poller_started

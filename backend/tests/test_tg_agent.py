@@ -47,17 +47,17 @@ class TelegramAgentTest(unittest.TestCase):
             "купил химию за 3500": (
                 "expense",
                 Decimal("3500"),
-                "Материалы и химия",
+                "Материалы",
             ),
             "потратил 1 250,50 на бензин": (
                 "expense",
                 Decimal("1250.50"),
-                "Топливо и транспорт",
+                "Топливо и машина",
             ),
             "оплатил аренду 9000": (
                 "expense",
                 Decimal("9000"),
-                "Аренда",
+                "Другое",
             ),
             "получил 5000 за дезинфекцию": (
                 "income",
@@ -67,17 +67,17 @@ class TelegramAgentTest(unittest.TestCase):
             "перевели нам 7000 за дератизацию": (
                 "income",
                 Decimal("7000"),
-                "Дератизация",
+                "Другие работы",
             ),
             "оплатили нам 4200 за насекомых": (
                 "income",
                 Decimal("4200"),
-                "Дезинсекция",
+                "Другие работы",
             ),
             "непонятная операция": (
                 "unknown",
                 Decimal("0.00"),
-                "Прочее",
+                "Другое",
             ),
         }
 
@@ -191,14 +191,14 @@ class TelegramAgentTest(unittest.TestCase):
             self.assertEqual(row.operation_date, date.today())
             self.assertEqual(row.kind, "expense")
             self.assertEqual(row.amount, Decimal("3500.00"))
-            self.assertEqual(row.category, "Материалы и химия")
+            self.assertEqual(row.category, "Материалы")
             self.assertTrue(row.review_required)
             tx_id = row.id
 
         send_message.assert_called_once_with(
             "token",
             101,
-            "Черновик: расход 3500 Материалы и химия",
+            "Черновик: расход 3500 Материалы",
             reply_markup={
                 "inline_keyboard": [
                     [
@@ -242,7 +242,7 @@ class TelegramAgentTest(unittest.TestCase):
             row = session.scalar(select(Transaction))
             self.assertEqual(row.amount, Decimal("0.00"))
             self.assertEqual(row.kind, "unknown")
-            self.assertEqual(row.category, "Прочее")
+            self.assertEqual(row.category, "Другое")
             self.assertTrue(row.review_required)
             self.assertIn("фото:", row.description)
             self.assertIn("чек на материалы", row.description)
@@ -280,7 +280,7 @@ class TelegramAgentTest(unittest.TestCase):
                 source="tg_agent",
                 operation_date=date.today(),
                 amount=Decimal("3500.00"),
-                category="Материалы и химия",
+                category="Материалы",
                 description="синтетический черновик",
                 kind="expense",
                 review_required=True,

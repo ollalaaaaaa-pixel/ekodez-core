@@ -1,0 +1,39 @@
+.day-page { display: flex; flex-direction: column; gap: 16px; }
+.day-toolbar, .day-total-card, .day-category-card, .day-entries-card { border-radius: 14px; }
+.day-total-card { border-left: 5px solid #1677ff; }
+.day-total-card.positive { border-left-color: #389e0d; }
+.day-total-card.negative { border-left-color: #cf1322; }
+.day-total-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.day-balance { margin: 4px 0; font-size: clamp(30px, 5vw, 46px); font-weight: 800; line-height: 1.1; }
+.day-category-card { height: 100%; }
+.day-income .ant-card-head { color: #237804; }
+.day-expense .ant-card-head { color: #a8071a; }
+.day-category-row + .day-category-row, .day-entry + .day-entry { border-top: 1px solid #f0f0f0; }
+.day-category-row { padding: 11px 0; }
+.day-category-name { font-weight: 600; }
+.day-inline-form { margin-top: 10px; }
+.day-inline-form .ant-input-number, .day-inline-form .ant-input,
+.day-inline-form .ant-btn, .day-action-button { min-height: 44px; }
+.day-amount-input { width: 170px; font-size: 20px; }
+.day-comment-input { min-width: 180px; flex: 1; }
+.day-entry { min-height: 54px; padding: 10px 0; }
+.day-entry-main { min-width: 0; }
+.day-entry-note { margin-top: 3px; overflow: hidden; color: #8c8c8c; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.income-value { color: #237804; font-weight: 700; }
+.expense-value { color: #a8071a; font-weight: 700; }
+.day-action-button { font-weight: 600; }
+.day-mobile-float { display: none; }
+.day-mobile-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.day-mobile-grid .ant-btn, .day-mobile-amount, .ant-modal .ant-btn { min-height: 48px; }
+.day-mobile-amount { width: 100%; font-size: 24px; }
+
+@media (max-width: 767px) {
+  .day-mobile-float { display: flex; }
+  .day-toolbar { align-items: stretch !important; }
+  .day-toolbar > * { width: 100%; }
+  .day-toolbar .ant-picker, .day-toolbar .ant-select { min-height: 44px; }
+  .day-category-card .ant-card-body, .day-entries-card .ant-card-body,
+  .day-total-card .ant-card-body { padding: 16px; }
+  .day-inline-form { display: none; }
+  .day-entry-note { white-space: normal; }
+}

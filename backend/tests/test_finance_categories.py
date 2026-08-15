@@ -1,30 +1,26 @@
 import unittest
 
-from app.finance_categories import classify_finance
+from app.finance_categories import classify_finance, default_finance_category
 
 
 class FinanceCategoriesTest(unittest.TestCase):
     def test_classifies_requested_keywords_case_insensitively(self):
         cases = {
-            "Купил ХИМИЮ": "Материалы и химия",
-            "Chemicals": "Материалы и химия",
-            "материалы для обработки": "Материалы и химия",
-            "расходники": "Материалы и химия",
-            "бензин": "Топливо и транспорт",
-            "оплатил топливо": "Топливо и транспорт",
-            "такси до клиента": "Топливо и транспорт",
-            "аренда склада": "Аренда",
-            "реклама в интернете": "Реклама",
-            "зарплата сотруднику": "Зарплата и авансы",
-            "аванс сотруднику": "Зарплата и авансы",
-            "новое оборудование": "Оборудование",
-            "удаление запаха": "Услуги: удаление запахов",
-            "озон": "Услуги: удаление запахов",
+            "химчистка дивана": "Химчистка",
+            "химчист ковра": "Химчистка",
             "дезинфекция помещения": "Дезинфекция",
-            "дезинсекция кухни": "Дезинсекция",
-            "насекомые": "Дезинсекция",
-            "дератизация склада": "Дератизация",
-            "грызуны": "Дератизация",
+            "санобработка помещения": "Дезинфекция",
+            "еда в дороге": "Еда",
+            "кафе": "Еда",
+            "продукты": "Еда",
+            "поели": "Еда",
+            "бензин": "Топливо и машина",
+            "оплатил топливо": "Топливо и машина",
+            "заправка": "Топливо и машина",
+            "такси до клиента": "Топливо и машина",
+            "Купил ХИМИЮ": "Материалы",
+            "материалы для обработки": "Материалы",
+            "расходники": "Материалы",
         }
 
         for text, expected in cases.items():
@@ -36,9 +32,14 @@ class FinanceCategoriesTest(unittest.TestCase):
 
     def test_first_rule_wins_when_multiple_categories_match(self):
         self.assertEqual(
-            classify_finance("химия и бензин"),
-            "Материалы и химия",
+            classify_finance("еда и бензин"),
+            "Еда",
         )
+
+    def test_kind_specific_fallbacks(self):
+        self.assertEqual(default_finance_category("income"), "Другие работы")
+        self.assertEqual(default_finance_category("expense"), "Другое")
+        self.assertEqual(default_finance_category("unknown"), "Другое")
 
 
 if __name__ == "__main__":
