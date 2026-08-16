@@ -1,5 +1,7 @@
 import hashlib
+import re
 import unittest
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -28,6 +30,37 @@ HEADERS = (
     "Назначение платежа",
     "Наименование контрагента",
     "ИНН контрагента",
+)
+
+REAL_LAYOUT_HEADERS = (
+    " ТИП   ОПЕРАЦИИ ",
+    "Дата проведения",
+    "Номер документа",
+    "Сумма в валюте СЧЁТА",
+    "Описание операции",
+    "Назначение платежа",
+    "Наименование плательщика",
+    "ИНН плательщика",
+    "Наименование получателя",
+    "ИНН получателя",
+    "Счёт плательщика",
+    "Счёт получателя",
+    "БИК плательщика",
+    "БИК получателя",
+    "Банк плательщика",
+    "Банк получателя",
+    "КПП плательщика",
+    "КПП получателя",
+    "Валюта",
+    "Статус",
+    "Очередность",
+    "Код операции",
+    "УИН",
+    "НДС",
+    "КБК",
+    "ОКТМО",
+    "Период",
+    "Служебная колонка",
 )
 
 
@@ -60,6 +93,72 @@ def workbook_bytes(*rows: tuple[object, ...], include_preamble: bool = True) -> 
     return output.getvalue()
 
 
+def real_layout_bytes(
+    *rows: tuple[object, ...], headers: tuple[str, ...] = REAL_LAYOUT_HEADERS
+) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.worksheets[0]
+    for label in (
+        "Выписка по счёту №",
+        "Клиент",
+        "ИНН",
+        "КПП",
+        "Входящий остаток",
+        "Исходящий остаток",
+        "Обороты по дебету",
+        "Обороты по кредиту",
+    ):
+        sheet.append((label,))
+    sheet.append(())
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(cast(list[Any], list(row)))
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def real_layout_row(
+    operation_type: str,
+    payer_name: str,
+    payer_inn: str,
+    recipient_name: str,
+    recipient_inn: str,
+) -> tuple[object, ...]:
+    return (
+        operation_type,
+        "15.08.2025",
+        "DOC-1",
+        "27,544.00",
+        "Описание",
+        "Назначение",
+        payer_name,
+        payer_inn,
+        recipient_name,
+        recipient_inn,
+        *("" for _ in range(18)),
+    )
+
+
+def force_incorrect_a1_dimension(content: bytes) -> bytes:
+    source = BytesIO(content)
+    output = BytesIO()
+    with (
+        zipfile.ZipFile(source) as source_zip,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as output_zip,
+    ):
+        for item in source_zip.infolist():
+            data = source_zip.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data, replacements = re.subn(
+                    rb'<dimension ref="[^"]+"\s*/>', b'<dimension ref="A1"/>', data
+                )
+                if replacements != 1:
+                    raise AssertionError("worksheet dimension fixture was not replaced")
+            output_zip.writestr(item, data)
+    return output.getvalue()
+
+
 class AmountAndDateParsingTest(unittest.TestCase):
     def test_string_amounts_support_russian_and_grouped_dot_formats(self):
         self.assertEqual(parse_amount("1 500 000,50"), Decimal("1500000.50"))
@@ -83,6 +182,86 @@ class AmountAndDateParsingTest(unittest.TestCase):
 
 
 class WorkbookParsingTest(unittest.TestCase):
+    def test_real_statement_with_incorrect_a1_dimension_is_still_read(self):
+        content = force_incorrect_a1_dimension(
+            real_layout_bytes(
+                real_layout_row(
+                    "Кредит",
+                    "Плательщик CREDIT",
+                    "1111111111",
+                    "Получатель CREDIT",
+                    "2222222222",
+                )
+            )
+        )
+
+        rows = parse_tbank_xlsx(content)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].amount, Decimal("27544.00"))
+
+    def test_real_layout_normalizes_headers_and_uses_directional_fallback(self):
+        content = real_layout_bytes(
+            real_layout_row(
+                "Кредит",
+                "Плательщик CREDIT",
+                "1111111111",
+                "Получатель CREDIT",
+                "2222222222",
+            ),
+            real_layout_row(
+                "Дебет",
+                "Плательщик DEBIT",
+                "3333333333",
+                "Получатель DEBIT",
+                "4444444444",
+            ),
+        )
+
+        rows = parse_tbank_xlsx(content)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].counterparty_name, "Плательщик CREDIT")
+        self.assertEqual(rows[0].counterparty_inn, "1111111111")
+        self.assertEqual(rows[1].counterparty_name, "Получатель DEBIT")
+        self.assertEqual(rows[1].counterparty_inn, "4444444444")
+        self.assertEqual(rows[0].amount, Decimal("27544.00"))
+        self.assertEqual(rows[0].operation_date, date(2025, 8, 15))
+
+    def test_exact_counterparty_columns_win_over_similar_columns(self):
+        headers = list(REAL_LAYOUT_HEADERS)
+        headers[10] = "Наименование контрагента"
+        headers[11] = "ИНН контрагента"
+        row = list(
+            real_layout_row(
+                "Кредит",
+                "Плательщик WRONG",
+                "1111111111",
+                "Получатель WRONG",
+                "2222222222",
+            )
+        )
+        row[10] = "Контрагент EXACT"
+        row[11] = "5555555555"
+
+        parsed = parse_tbank_xlsx(real_layout_bytes(tuple(row), headers=tuple(headers)))
+
+        self.assertEqual(parsed[0].counterparty_name, "Контрагент EXACT")
+        self.assertEqual(parsed[0].counterparty_inn, "5555555555")
+
+    def test_missing_headers_report_best_row_found_and_missing_columns(self):
+        headers = list(REAL_LAYOUT_HEADERS)
+        headers[7] = "Неизвестная колонка 1"
+        headers[9] = "Неизвестная колонка 2"
+
+        with self.assertRaises(BankImportError) as context:
+            parse_tbank_xlsx(real_layout_bytes(headers=tuple(headers)))
+
+        self.assertEqual(context.exception.searched_row, 10)
+        self.assertIn("тип операции", context.exception.found_columns)
+        self.assertIn("инн контрагента", context.exception.missing_columns)
+        self.assertNotIn("инн плательщика", context.exception.found_columns)
+
     def test_parser_finds_headers_after_preamble_and_reads_rows(self):
         content = workbook_bytes(
             (

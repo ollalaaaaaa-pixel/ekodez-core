@@ -76,6 +76,13 @@ type ConfirmResult = {
 
 type ExpenseCategory = { id: number; name: string }
 
+type PreviewErrorDetail = {
+  message?: string
+  found_columns?: string[]
+  missing_columns?: string[]
+  searched_row?: number | null
+}
+
 type Props = {
   open: boolean
   onClose: () => void
@@ -88,6 +95,21 @@ const money = (value: string) =>
     maximumFractionDigits: 2,
   }).format(Number(value))
 
+const previewErrorText = (detail: unknown) => {
+  if (typeof detail === 'string') return detail
+  if (!detail || typeof detail !== 'object') return 'Неизвестная ошибка файла'
+  const data = detail as PreviewErrorDetail
+  const parts = [data.message ?? 'Не удалось распознать заголовки']
+  if (data.searched_row) parts.push(`Строка: ${data.searched_row}`)
+  if (data.found_columns?.length) {
+    parts.push(`Найдены: ${data.found_columns.join(', ')}`)
+  }
+  if (data.missing_columns?.length) {
+    parts.push(`Отсутствуют: ${data.missing_columns.join(', ')}`)
+  }
+  return parts.join('. ')
+}
+
 export default function BankImportDrawer({ open, onClose, onImported }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [rows, setRows] = useState<EditableBankRow[]>([])
@@ -95,6 +117,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [result, setResult] = useState<ConfirmResult | null>(null)
+  const [previewError, setPreviewError] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -126,16 +149,26 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
     }
     setPreviewLoading(true)
     setResult(null)
+    setPreviewError('')
     try {
       const body = new FormData()
       body.append('file', file)
       const response = await fetch(API + '/api/bank/preview', { method: 'POST', body })
-      if (!response.ok) throw new Error('Выписка не прошла проверку')
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { detail?: unknown }
+          | null
+        throw new Error(previewErrorText(payload?.detail))
+      }
       const previewRows = (await response.json()) as BankPreviewRow[]
       setRows(previewRows.map((row) => ({ ...row, reviewConfirmed: false })))
       if (!previewRows.length) message.info('В выписке нет операций')
-    } catch {
-      message.error('Не удалось прочитать XLSX. Проверьте формат выписки Т-Банка.')
+    } catch (error) {
+      const detail = error instanceof Error
+        ? error.message
+        : 'Не удалось прочитать XLSX. Проверьте формат выписки Т-Банка.'
+      setPreviewError(detail)
+      message.error('Не удалось прочитать выписку')
     } finally {
       setPreviewLoading(false)
     }
@@ -182,6 +215,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
     setFile(null)
     setRows([])
     setResult(null)
+    setPreviewError('')
     onClose()
   }
 
@@ -278,6 +312,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
                 setFile(nextFile)
                 setRows([])
                 setResult(null)
+                setPreviewError('')
                 return false
               }}
             >
@@ -300,6 +335,15 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
             </Button>
           </Flex>
         </Card>
+
+        {previewError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Ошибка предпросмотра"
+            description={previewError}
+          />
+        ) : null}
 
         {rows.length ? (
           <>

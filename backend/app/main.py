@@ -441,7 +441,7 @@ async def bank_preview(file: UploadFile = File()):
     try:
         rows = parse_tbank_xlsx(await file.read())
     except BankImportError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=error.as_detail()) from error
 
     return [
         BankPreviewOut(

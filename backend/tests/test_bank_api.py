@@ -139,6 +139,44 @@ class BankImportApiTest(unittest.TestCase):
         self.assertEqual(corrupt.status_code, 400)
         self.assertNotIn("2901000000", corrupt.json()["detail"])
 
+    def test_preview_returns_actionable_header_diagnostics(self):
+        workbook = Workbook()
+        sheet = workbook.worksheets[0]
+        for row_number in range(1, 10):
+            sheet.append((f"Сводка {row_number}",))
+        sheet.append(
+            (
+                "Тип операции",
+                "Дата проведения",
+                "Номер документа",
+                "Сумма в валюте счета",
+                "Описание операции",
+                "Назначение платежа",
+                "Наименование плательщика",
+            )
+        )
+        output = BytesIO()
+        workbook.save(output)
+
+        response = self.client.post(
+            "/api/bank/preview",
+            files={
+                "file": (
+                    "diagnostic.xlsx",
+                    output.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["message"], "required columns not found")
+        self.assertEqual(detail["searched_row"], 10)
+        self.assertIn("тип операции", detail["found_columns"])
+        self.assertIn("наименование контрагента", detail["missing_columns"])
+        self.assertIn("инн контрагента", detail["missing_columns"])
+
     def test_confirm_rejects_hash_tampering_and_invalid_review_decisions(self):
         review_row = preview(
             self.client,
