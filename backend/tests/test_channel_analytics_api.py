@@ -50,7 +50,7 @@ class ChannelAnalyticsApiTest(unittest.TestCase):
     def test_owner_approved_channels_are_accepted_for_income(self):
         self.assertEqual(
             CHANNELS,
-            ("Яндекс", "2ГИС", "Авито", "ВК", "Сарафан", "Прочее"),
+            ["Яндекс", "2ГИС", "Авито", "ВК", "Сарафан", "Прочее"],
         )
         for channel in CHANNELS:
             with self.subTest(channel=channel):

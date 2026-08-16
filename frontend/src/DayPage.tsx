@@ -168,7 +168,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
           onChange={(category) => setDraft({ ...draft, category })}
           options={categories.map((category) => ({ value: category, label: category }))} />
         {kind === 'income' && <Select className="day-channel-select" allowClear
-          placeholder="Канал (необязательно)" value={draft.channel || undefined}
+          placeholder="Не указан" value={draft.channel || undefined}
           onChange={(channel) => setDraft({ ...draft, channel: channel ?? '' })}
           options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
         {kind === 'expense' && <Button className="day-new-category"
@@ -253,7 +253,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
             onChange={(category) => setMobileDraft({ ...mobileDraft, category })}
             options={mobileCategories.map((category) => ({ value: category, label: category }))} />
           {mobileDraft.kind === 'income' && <Select className="day-channel-select" allowClear
-            placeholder="Канал (необязательно)" value={mobileDraft.channel || undefined}
+            placeholder="Не указан" value={mobileDraft.channel || undefined}
             onChange={(channel) => setMobileDraft({ ...mobileDraft, channel: channel ?? '' })}
             options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
           {mobileDraft.kind === 'expense' && <Button block className="day-new-category" icon={<PlusOutlined />}
