@@ -1,0 +1,50 @@
+.bank-import-content {
+  width: 100%;
+}
+
+.bank-touch-button,
+.bank-review-button,
+.bank-confirm-button {
+  min-height: 44px;
+}
+
+.bank-category-select {
+  width: 100%;
+  min-width: 190px;
+}
+
+.bank-category-select .ant-select-selector {
+  min-height: 44px;
+  align-items: center;
+}
+
+.bank-import-review-row > td {
+  background: #fffbe6 !important;
+}
+
+.bank-income {
+  color: #389e0d;
+}
+
+.bank-expense {
+  color: #cf1322;
+}
+
+.bank-import-report .ant-descriptions-item-label {
+  width: 250px;
+}
+
+@media (max-width: 767px) {
+  .bank-import-drawer .ant-drawer-header,
+  .bank-import-drawer .ant-drawer-body {
+    padding-inline: 12px;
+  }
+
+  .bank-touch-button {
+    width: 100%;
+  }
+
+  .bank-import-report .ant-descriptions-item-label {
+    width: auto;
+  }
+}

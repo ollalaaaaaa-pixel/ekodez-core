@@ -187,6 +187,7 @@ class TelegramAgentTest(unittest.TestCase):
         with Session(self.engine) as session:
             row = session.scalar(select(Transaction))
             self.assertIsNotNone(row)
+            assert row is not None
             self.assertEqual(row.source, "tg_agent")
             self.assertEqual(row.operation_date, date.today())
             self.assertEqual(row.kind, "expense")
@@ -224,9 +225,7 @@ class TelegramAgentTest(unittest.TestCase):
                 tg_poller.urllib.request,
                 "urlopen",
                 side_effect=[
-                    FakeResponse(
-                        {"ok": True, "result": {"file_path": "photos/a.jpg"}}
-                    ),
+                    FakeResponse({"ok": True, "result": {"file_path": "photos/a.jpg"}}),
                     FakeResponse(b"synthetic-image", raw=True),
                 ],
             ),
@@ -240,10 +239,14 @@ class TelegramAgentTest(unittest.TestCase):
 
         with Session(self.engine) as session:
             row = session.scalar(select(Transaction))
+            self.assertIsNotNone(row)
+            assert row is not None
             self.assertEqual(row.amount, Decimal("0.00"))
             self.assertEqual(row.kind, "unknown")
             self.assertEqual(row.category, "Прочее")
             self.assertTrue(row.review_required)
+            self.assertIsNotNone(row.description)
+            assert row.description is not None
             self.assertIn("фото:", row.description)
             self.assertIn("чек на материалы", row.description)
 
@@ -313,6 +316,8 @@ class TelegramAgentTest(unittest.TestCase):
 
         with Session(self.engine) as session:
             row = session.get(Transaction, tx_id)
+            self.assertIsNotNone(row)
+            assert row is not None
             self.assertFalse(row.review_required)
             self.assertEqual(row.kind, "expense")
         answer.assert_called_once_with("token", "callback-1")

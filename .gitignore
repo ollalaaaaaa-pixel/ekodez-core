@@ -2,6 +2,12 @@
 __pycache__/
 *.pyc
 .env
+.env.*
+*.key
+*.pem
+secrets/
+credentials/
+tokens/
 node_modules/
 dist/
 tg_offset.json

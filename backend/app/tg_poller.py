@@ -102,8 +102,7 @@ def _send_message(
             return True
         except Exception as exc:
             print(
-                "TG sendMessage failed: "
-                f"{type(exc).__name__}, attempt {attempt}/3",
+                "TG sendMessage failed: " f"{type(exc).__name__}, attempt {attempt}/3",
                 file=sys.stderr,
             )
             if attempt < 3:
@@ -173,13 +172,10 @@ def _allowed_sender_ids() -> set[int]:
 def _parse_agent_text(text: str) -> tuple[str, Decimal, str]:
     normalized = text.lower()
     if any(
-        phrase in normalized
-        for phrase in ("перевели нам", "оплатили нам", "получил")
+        phrase in normalized for phrase in ("перевели нам", "оплатили нам", "получил")
     ):
         kind = "income"
-    elif any(
-        phrase in normalized for phrase in ("купил", "потратил", "оплатил")
-    ):
+    elif any(phrase in normalized for phrase in ("купил", "потратил", "оплатил")):
         kind = "expense"
     else:
         kind = "unknown"
@@ -237,9 +233,7 @@ def _download_photo(token: str, file_id: str) -> str:
             file_path = (payload.get("result") or {}).get("file_path")
             if not payload.get("ok") or not file_path:
                 raise RuntimeError("Telegram getFile returned no file_path")
-            download_url = (
-                "https://api.telegram.org/file/bot" + token + "/" + file_path
-            )
+            download_url = "https://api.telegram.org/file/bot" + token + "/" + file_path
             with urllib.request.urlopen(download_url, timeout=15) as response:
                 content = response.read()
             os.makedirs(ATTACHMENTS_DIR, exist_ok=True)

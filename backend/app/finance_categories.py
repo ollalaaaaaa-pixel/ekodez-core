@@ -2,7 +2,6 @@
 
 from collections.abc import Mapping
 
-
 INCOME_CATEGORY_KEYWORDS_V1: Mapping[str, tuple[str, ...]] = {
     "Химчистка": ("химчист",),
     "Дезинсекция": ("дезинсек", "таракан", "клоп", "насеком"),

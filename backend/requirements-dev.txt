@@ -1,0 +1,6 @@
+-r requirements.txt
+black==26.5.1
+httpx2==2.10.0
+mypy==2.3.1
+ruff==0.16.3
+types-openpyxl==3.1.5.20260807

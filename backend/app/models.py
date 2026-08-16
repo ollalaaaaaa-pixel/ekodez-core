@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -24,6 +25,14 @@ class Transaction(Base):
     entered_by: Mapped[str] = mapped_column(String(50), default="Артем")
     kind: Mapped[str] = mapped_column(String(20), default="unknown")
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    doc_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    counterparty_inn: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    import_batch_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

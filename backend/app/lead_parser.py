@@ -1,5 +1,20 @@
 import re
 from datetime import datetime
+from typing import TypedDict
+
+
+class OrderData(TypedDict):
+    external_id: str
+    client_name: str
+    phone: str
+    address: str
+    area: str
+    reason: str
+    comment: str
+    amount_note: str
+    contract: str
+    partner: str
+    order_at: datetime | None
 
 
 def _field(text: str, label: str) -> str:
@@ -8,8 +23,8 @@ def _field(text: str, label: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def parse_order_text(text: str) -> dict:
-    data = {
+def parse_order_text(text: str) -> OrderData:
+    data: OrderData = {
         "external_id": _field(text, "id сделки:"),
         "client_name": _field(text, "Имя клиента:"),
         "phone": _field(text, "Телефон:"),

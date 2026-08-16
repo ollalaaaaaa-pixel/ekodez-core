@@ -20,15 +20,15 @@ class FinanceApiTest(unittest.TestCase):
         main.engine = self.original_engine
         self.engine.dispose()
 
-    def transaction_in(self, **overrides):
-        values = {
+    def transaction_in(self, **overrides: object) -> main.TransactionIn:
+        values: dict[str, object] = {
             "operation_date": date(2026, 8, 16),
             "amount": Decimal("100.00"),
             "counterparty": None,
             "description": None,
         }
         values.update(overrides)
-        return main.TransactionIn(**values)
+        return main.TransactionIn.model_validate(values)
 
     def test_create_transaction_classifies_combined_description_and_counterparty(self):
         row = main.create_transaction(

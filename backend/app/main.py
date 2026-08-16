@@ -1,15 +1,32 @@
 import os
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
+from typing import TypedDict
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.bank_import import (
+    MONEY_QUANTUM,
+    BankImportError,
+    BankRow,
+    ClassificationResult,
+    mask_inn,
+    parse_amount,
+    parse_tbank_xlsx,
+    source_hash,
+    transaction_comment,
+)
+from app.bank_import import (
+    classify_transaction as classify_bank_transaction,
+)
 from app.channels import CHANNELS
 from app.finance_categories import (
     INCOME_CATEGORIES_V1,
@@ -117,6 +134,68 @@ class ChannelAnalyticsOut(BaseModel):
     channels: list[ChannelAnalyticsItem]
 
 
+class ChannelAnalyticsRow(TypedDict):
+    channel: str
+    total_amount: Decimal
+    count: int
+    avg_check: Decimal
+    share_percent: Decimal
+
+
+class BankPreviewOut(BaseModel):
+    operation_type: str
+    operation_date: date
+    doc_number: str
+    amount: Decimal
+    description: str
+    payment_purpose: str
+    counterparty_name: str
+    counterparty_inn: str
+    counterparty_inn_masked: str
+    source_hash: str
+    kind: str
+    category: str | None
+    channel: str | None
+    comment: str
+    needs_review: bool
+    is_transfer: bool
+
+
+class BankConfirmRowIn(BaseModel):
+    operation_type: str
+    operation_date: date
+    doc_number: str
+    amount: str
+    description: str
+    payment_purpose: str
+    counterparty_name: str
+    counterparty_inn: str
+    source_hash: str = Field(min_length=64, max_length=64)
+    category_override: str | None = None
+    review_confirmed: bool = False
+
+
+class BankConfirmIn(BaseModel):
+    source_filename: str
+    transactions: list[BankConfirmRowIn]
+
+
+class BankConfirmOut(BaseModel):
+    imported: int
+    skipped_duplicates: int
+    batch_id: str
+    imported_income_amount: str
+    imported_expense_amount: str
+    duplicate_income_amount: str
+    duplicate_expense_amount: str
+    excluded_credit_amount: str
+    excluded_debit_amount: str
+    statement_credit_total: str
+    statement_debit_total: str
+    credit_reconciled: bool
+    debit_reconciled: bool
+
+
 class LeadOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -183,9 +262,9 @@ def create_transaction(payload: TransactionIn):
         values = payload.model_dump()
         values["channel"] = _transaction_channel(payload.kind, payload.channel)
         finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
-        values["category"] = classify_finance(
-            finance_text
-        ) or default_finance_category(payload.kind)
+        values["category"] = classify_finance(finance_text) or default_finance_category(
+            payload.kind
+        )
         row = Transaction(**values)
         session.add(row)
         session.commit()
@@ -233,14 +312,14 @@ def finance_summary():
             select(func.count()).where(Transaction.review_required == True)
         )
         return FinanceSummary(
-            income=income, expense=expense, review_count=review_count
+            income=income or Decimal("0.00"),
+            expense=expense or Decimal("0.00"),
+            review_count=int(review_count or 0),
         )
 
 
 @app.get("/api/analytics/channels", response_model=ChannelAnalyticsOut)
-def channel_analytics(
-    start_date: date = Query(), end_date: date = Query()
-):
+def channel_analytics(start_date: date = Query(), end_date: date = Query()):
     if start_date > end_date:
         raise HTTPException(status_code=422, detail="bad date range")
 
@@ -262,9 +341,7 @@ def channel_analytics(
     grouped: dict[str, tuple[Decimal, int]] = {}
     for channel, total, count in rows:
         label = channel.strip() if channel and channel.strip() else "Не указан"
-        previous_total, previous_count = grouped.get(
-            label, (Decimal("0.00"), 0)
-        )
+        previous_total, previous_count = grouped.get(label, (Decimal("0.00"), 0))
         grouped[label] = (
             previous_total + Decimal(total),
             previous_count + int(count),
@@ -274,7 +351,7 @@ def channel_analytics(
     period_total = sum(
         (total for total, _ in grouped.values()), Decimal("0.00")
     ).quantize(cents)
-    channels = []
+    channels: list[ChannelAnalyticsRow] = []
     for channel, (total, count) in grouped.items():
         rounded_total = total.quantize(cents)
         channels.append(
@@ -294,9 +371,7 @@ def channel_analytics(
     return {"period_total": period_total, "channels": channels}
 
 
-@app.get(
-    "/api/expense-categories", response_model=list[ExpenseCategoryOut]
-)
+@app.get("/api/expense-categories", response_model=list[ExpenseCategoryOut])
 def list_expense_categories():
     with Session(engine) as session:
         return session.scalars(
@@ -322,9 +397,7 @@ def create_expense_category(payload: ExpenseCategoryIn):
             None,
         )
         if existing is not None:
-            raise HTTPException(
-                status_code=400, detail="category already exists"
-            )
+            raise HTTPException(status_code=400, detail="category already exists")
 
         row = ExpenseCategory(name=name)
         session.add(row)
@@ -337,6 +410,189 @@ def create_expense_category(payload: ExpenseCategoryIn):
             ) from error
         session.refresh(row)
         return row
+
+
+def _bank_row(payload: BankConfirmRowIn) -> BankRow:
+    try:
+        amount = parse_amount(payload.amount)
+    except BankImportError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return BankRow(
+        operation_type=payload.operation_type,
+        operation_date=payload.operation_date,
+        doc_number=payload.doc_number,
+        amount=amount,
+        description=payload.description,
+        payment_purpose=payload.payment_purpose,
+        counterparty_name=payload.counterparty_name,
+        counterparty_inn=payload.counterparty_inn,
+    )
+
+
+def _money(value: Decimal) -> str:
+    return f"{value.quantize(MONEY_QUANTUM):.2f}"
+
+
+@app.post("/api/bank/preview", response_model=list[BankPreviewOut])
+async def bank_preview(file: UploadFile = File()):
+    filename = file.filename or ""
+    if Path(filename).suffix.casefold() != ".xlsx":
+        raise HTTPException(status_code=400, detail="XLSX file required")
+    try:
+        rows = parse_tbank_xlsx(await file.read())
+    except BankImportError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return [
+        BankPreviewOut(
+            operation_type=row.operation_type,
+            operation_date=row.operation_date,
+            doc_number=row.doc_number,
+            amount=row.amount,
+            description=row.description,
+            payment_purpose=row.payment_purpose,
+            counterparty_name=row.counterparty_name,
+            counterparty_inn=row.counterparty_inn,
+            counterparty_inn_masked=mask_inn(row.counterparty_inn),
+            source_hash=source_hash(row),
+            kind=classification.kind,
+            category=classification.category,
+            channel=classification.channel,
+            comment=transaction_comment(row),
+            needs_review=classification.needs_review,
+            is_transfer=classification.is_transfer,
+        )
+        for row in rows
+        for classification in (classify_bank_transaction(row),)
+    ]
+
+
+@app.post("/api/bank/confirm", response_model=BankConfirmOut)
+def bank_confirm(payload: BankConfirmIn):
+    source_filename = Path(payload.source_filename).name
+    if not source_filename or Path(source_filename).suffix.casefold() != ".xlsx":
+        raise HTTPException(status_code=422, detail="bad source filename")
+
+    batch_id = uuid4()
+    zero = Decimal("0.00")
+    imported = 0
+    duplicates = 0
+    imported_amounts = {"income": zero, "expense": zero}
+    duplicate_amounts = {"income": zero, "expense": zero}
+    excluded_amounts = {"income": zero, "expense": zero}
+    statement_amounts = {"income": zero, "expense": zero}
+
+    with Session(engine) as session, session.begin():
+        active_expense_categories = set(
+            session.scalars(
+                select(ExpenseCategory.name).where(ExpenseCategory.is_active == True)
+            ).all()
+        )
+        processed: list[tuple[BankRow, ClassificationResult, str | None]] = []
+        for item in payload.transactions:
+            row = _bank_row(item)
+            try:
+                classification = classify_bank_transaction(row)
+            except BankImportError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            if source_hash(row) != item.source_hash:
+                raise HTTPException(status_code=422, detail="source hash mismatch")
+
+            category_override = (
+                item.category_override.strip() if item.category_override else None
+            )
+            if classification.needs_review:
+                if not item.review_confirmed or not category_override:
+                    raise HTTPException(
+                        status_code=422, detail="review decision required"
+                    )
+                allowed_categories = (
+                    set(INCOME_CATEGORIES_V1)
+                    if classification.kind == "income"
+                    else active_expense_categories
+                )
+                if category_override not in allowed_categories:
+                    raise HTTPException(status_code=422, detail="bad category override")
+            elif category_override is not None:
+                raise HTTPException(
+                    status_code=422, detail="category override is not allowed"
+                )
+            processed.append((row, classification, category_override))
+
+        for row, raw_classification, category_override in processed:
+            classification = raw_classification
+            kind = classification.kind
+            statement_amounts[kind] += row.amount
+            if classification.is_transfer:
+                excluded_amounts[kind] += row.amount
+                continue
+
+            digest = source_hash(row)
+            existing = session.scalar(
+                select(Transaction.id).where(Transaction.source_hash == digest)
+            )
+            if existing is not None:
+                duplicates += 1
+                duplicate_amounts[kind] += row.amount
+                continue
+
+            transaction = Transaction(
+                source="tbank",
+                operation_date=row.operation_date,
+                amount=row.amount,
+                currency="RUB",
+                counterparty=row.counterparty_name or None,
+                description=transaction_comment(row) or None,
+                category=category_override or classification.category,
+                channel=classification.channel,
+                entered_by="Артем",
+                kind=kind,
+                review_required=False,
+                source_hash=digest,
+                doc_number=row.doc_number or None,
+                counterparty_inn=row.counterparty_inn or None,
+                import_batch_id=batch_id,
+                source_filename=source_filename,
+                needs_review=classification.needs_review,
+            )
+            try:
+                with session.begin_nested():
+                    session.add(transaction)
+                    session.flush()
+            except IntegrityError:
+                duplicates += 1
+                duplicate_amounts[kind] += row.amount
+            else:
+                imported += 1
+                imported_amounts[kind] += row.amount
+
+    credit_total = statement_amounts["income"].quantize(MONEY_QUANTUM)
+    debit_total = statement_amounts["expense"].quantize(MONEY_QUANTUM)
+    credit_parts = (
+        imported_amounts["income"]
+        + duplicate_amounts["income"]
+        + excluded_amounts["income"]
+    ).quantize(MONEY_QUANTUM)
+    debit_parts = (
+        imported_amounts["expense"]
+        + duplicate_amounts["expense"]
+        + excluded_amounts["expense"]
+    ).quantize(MONEY_QUANTUM)
+    return BankConfirmOut(
+        imported=imported,
+        skipped_duplicates=duplicates,
+        batch_id=str(batch_id),
+        imported_income_amount=_money(imported_amounts["income"]),
+        imported_expense_amount=_money(imported_amounts["expense"]),
+        duplicate_income_amount=_money(duplicate_amounts["income"]),
+        duplicate_expense_amount=_money(duplicate_amounts["expense"]),
+        excluded_credit_amount=_money(excluded_amounts["income"]),
+        excluded_debit_amount=_money(excluded_amounts["expense"]),
+        statement_credit_total=_money(credit_total),
+        statement_debit_total=_money(debit_total),
+        credit_reconciled=credit_parts == credit_total,
+        debit_reconciled=debit_parts == debit_total,
+    )
 
 
 @app.get("/api/day")
@@ -367,8 +623,8 @@ def get_day(day: date = Query(alias="date")):
             (row.amount for row in rows if row.kind == "expense"), Decimal("0")
         )
         category_pairs = [
-            *(('income', category) for category in INCOME_CATEGORIES_V1),
-            *(('expense', category) for category in active_expense_categories),
+            *(("income", category) for category in INCOME_CATEGORIES_V1),
+            *(("expense", category) for category in active_expense_categories),
         ]
         for row in rows:
             category = row.category or default_finance_category(row.kind)
@@ -382,8 +638,7 @@ def get_day(day: date = Query(alias="date")):
                     row.amount
                     for row in rows
                     if row.kind == kind
-                    and (row.category or default_finance_category(row.kind))
-                    == category
+                    and (row.category or default_finance_category(row.kind)) == category
                 ),
                 Decimal("0"),
             )
@@ -397,8 +652,7 @@ def get_day(day: date = Query(alias="date")):
             {
                 "id": row.id,
                 "kind": row.kind,
-                "category": row.category
-                or default_finance_category(row.kind),
+                "category": row.category or default_finance_category(row.kind),
                 "amount": row.amount,
                 "description": row.description,
                 "entered_by": row.entered_by,
@@ -421,10 +675,7 @@ def get_day(day: date = Query(alias="date")):
 def create_day_entry(payload: DayEntryIn):
     if payload.kind not in ("income", "expense"):
         raise HTTPException(status_code=422, detail="bad kind")
-    if (
-        payload.kind == "income"
-        and payload.category not in INCOME_CATEGORIES_V1
-    ):
+    if payload.kind == "income" and payload.category not in INCOME_CATEGORIES_V1:
         raise HTTPException(status_code=422, detail="bad category")
     if payload.amount < 0:
         raise HTTPException(status_code=422, detail="bad amount")

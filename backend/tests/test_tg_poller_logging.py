@@ -7,8 +7,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from app import tg_poller
-from app import main
+from app import main, tg_poller
 from app.models import Base, Lead
 
 
@@ -32,9 +31,11 @@ class FakeResponse:
 
 class TelegramPollerLoggingTest(unittest.TestCase):
     def test_health_reports_process_local_poller_state(self):
-        with patch.object(tg_poller, "poller_started", return_value=True):
-            with patch.object(main, "poller_started", tg_poller.poller_started):
-                self.assertEqual(main.health()["telegram"], "started")
+        with (
+            patch.object(tg_poller, "poller_started", return_value=True),
+            patch.object(main, "poller_started", tg_poller.poller_started),
+        ):
+            self.assertEqual(main.health()["telegram"], "started")
 
     def test_start_poller_sets_started_state_after_thread_start(self):
         tg_poller._poller_started = False
@@ -96,9 +97,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
             return FakeResponse({"ok": True, "result": {"message_id": 1}})
 
         with patch.object(tg_poller.urllib.request, "urlopen", fake_urlopen):
-            result = tg_poller._send_message(
-                "test-token", 42, "✅ Заявка принята"
-            )
+            result = tg_poller._send_message("test-token", 42, "✅ Заявка принята")
 
         self.assertTrue(result)
         self.assertEqual(

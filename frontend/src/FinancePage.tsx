@@ -3,8 +3,11 @@ import {
   Button, Card, Col, Empty, InputNumber, Progress, Row, Segmented, Space,
   Spin, Statistic, Table, Tag, Typography,
 } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, EyeOutlined } from '@ant-design/icons'
+import {
+  ArrowDownOutlined, ArrowUpOutlined, EyeOutlined, UploadOutlined,
+} from '@ant-design/icons'
 import dayjs from 'dayjs'
+import BankImportDrawer from './BankImportDrawer'
 import './FinancePage.css'
 
 const API = 'http://127.0.0.1:8000'
@@ -66,6 +69,8 @@ export default function FinancePage() {
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [channelAnalytics, setChannelAnalytics] = useState<ChannelAnalytics | null>(null)
   const [channelLoading, setChannelLoading] = useState(true)
+  const [analyticsRefresh, setAnalyticsRefresh] = useState(0)
+  const [bankImportOpen, setBankImportOpen] = useState(false)
   const [error, setError] = useState('')
 
   const load = () => {
@@ -105,7 +110,12 @@ export default function FinancePage() {
         if (!controller.signal.aborted) setChannelLoading(false)
       })
     return () => controller.abort()
-  }, [period])
+  }, [period, analyticsRefresh])
+
+  const handleImported = () => {
+    load()
+    setAnalyticsRefresh((value) => value + 1)
+  }
 
   const classify = (id: number, kind: string) => {
     const amount = draftAmounts[id]
@@ -204,6 +214,16 @@ export default function FinancePage() {
 
   return (
     <div>
+      <div className="finance-toolbar">
+        <Typography.Title level={3} style={{ margin: 0 }}>Финансы</Typography.Title>
+        <Button
+          type="primary"
+          icon={<UploadOutlined />}
+          onClick={() => setBankImportOpen(true)}
+        >
+          Импорт выписки (Т-Банк)
+        </Button>
+      </div>
       <Row gutter={16}>
         <Col span={8}>
           <Card>
@@ -287,6 +307,11 @@ export default function FinancePage() {
       <Card style={{ marginTop: 16 }} title="Операции">
         <Table rowKey="id" columns={columns as any} dataSource={rows} pagination={{ pageSize: 10 }} />
       </Card>
+      <BankImportDrawer
+        open={bankImportOpen}
+        onClose={() => setBankImportOpen(false)}
+        onImported={handleImported}
+      />
     </div>
   )
 }

@@ -39,9 +39,7 @@ class ExpenseCategoriesApiTest(unittest.TestCase):
         main.create_expense_category(main.ExpenseCategoryIn(name="Аренда склада"))
 
         with self.assertRaises(HTTPException) as context:
-            main.create_expense_category(
-                main.ExpenseCategoryIn(name="аренда склада")
-            )
+            main.create_expense_category(main.ExpenseCategoryIn(name="аренда склада"))
 
         self.assertEqual(context.exception.status_code, 400)
 
@@ -49,9 +47,7 @@ class ExpenseCategoriesApiTest(unittest.TestCase):
         for name in ("   ", "x" * 101):
             with self.subTest(name_length=len(name)):
                 with self.assertRaises(HTTPException) as context:
-                    main.create_expense_category(
-                        main.ExpenseCategoryIn(name=name)
-                    )
+                    main.create_expense_category(main.ExpenseCategoryIn(name=name))
                 self.assertEqual(context.exception.status_code, 422)
 
     def test_integrity_error_is_reported_as_duplicate(self):
