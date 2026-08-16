@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app import main
-from app.models import Base, Transaction
+from app.models import Base, ExpenseCategory, Transaction
 
 
 class DayApiTest(unittest.TestCase):
@@ -16,6 +16,14 @@ class DayApiTest(unittest.TestCase):
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         main.engine = self.engine
+        with Session(self.engine) as session:
+            session.add_all(
+                [
+                    ExpenseCategory(name="Еда"),
+                    ExpenseCategory(name="Аренда склада"),
+                ]
+            )
+            session.commit()
 
     def tearDown(self):
         main.engine = self.original_engine
@@ -54,7 +62,7 @@ class DayApiTest(unittest.TestCase):
         }
         self.assertEqual(category_totals[("income", "Химчистка")], 9000)
         self.assertEqual(category_totals[("expense", "Еда")], 500)
-        self.assertEqual(len(result["categories"]), 7)
+        self.assertEqual(len(result["categories"]), 11)
         self.assertEqual(result["entries"][0]["id"], income.id)
         self.assertEqual(result["entries"][0]["entered_by"], "Алексей")
         self.assertEqual(result["entries"][0]["source"], "manual")
@@ -106,7 +114,7 @@ class DayApiTest(unittest.TestCase):
                         source="tg_agent",
                         operation_date=date.today(),
                         amount=Decimal("1.00"),
-                        category="Другое",
+                        category="Прочее",
                         kind="expense",
                         review_required=False,
                     ),
@@ -114,7 +122,7 @@ class DayApiTest(unittest.TestCase):
                         source="manual",
                         operation_date=date.today() - timedelta(days=1),
                         amount=Decimal("1.00"),
-                        category="Другое",
+                        category="Прочее",
                         kind="expense",
                         review_required=False,
                     ),
@@ -140,6 +148,66 @@ class DayApiTest(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_dynamic_expense_category_is_accepted_and_aggregated(self):
+        target = date(2026, 8, 15)
+        main.create_day_entry(
+            main.DayEntryIn(
+                kind="expense",
+                category="Аренда склада",
+                amount=Decimal("5000.00"),
+                comment="Склад",
+                date=target,
+            )
+        )
+
+        result = main.get_day(target)
+        totals = {
+            (item["kind"], item["category"]): item["total"]
+            for item in result["categories"]
+        }
+
+        self.assertEqual(totals[("expense", "Аренда склада")], 5000)
+
+    def test_unknown_or_inactive_expense_category_is_rejected(self):
+        with Session(self.engine) as session:
+            session.add(ExpenseCategory(name="Скрытая", is_active=False))
+            session.commit()
+
+        for category in ("Неизвестная", "Скрытая"):
+            with self.subTest(category=category):
+                with self.assertRaises(HTTPException) as context:
+                    main.create_day_entry(
+                        main.DayEntryIn(
+                            kind="expense",
+                            category=category,
+                            amount=Decimal("100.00"),
+                        )
+                    )
+                self.assertEqual(context.exception.status_code, 422)
+
+    def test_historical_expense_category_is_not_lost_from_day_totals(self):
+        target = date(2026, 8, 14)
+        with Session(self.engine) as session:
+            session.add(
+                Transaction(
+                    source="manual",
+                    operation_date=target,
+                    amount=Decimal("700.00"),
+                    category="Старая статья",
+                    kind="expense",
+                    review_required=False,
+                )
+            )
+            session.commit()
+
+        result = main.get_day(target)
+        totals = {
+            (item["kind"], item["category"]): item["total"]
+            for item in result["categories"]
+        }
+
+        self.assertEqual(totals[("expense", "Старая статья")], 700)
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ export default function FinancePage() {
       title: 'Статья',
       dataIndex: 'category',
       key: 'category',
-      render: (category: string | null) => category ?? 'Другое',
+      render: (category: string | null) => category ?? 'Прочее',
     },
     {
       title: 'Детали',

@@ -11,9 +11,13 @@
 .day-category-row + .day-category-row, .day-entry + .day-entry { border-top: 1px solid #f0f0f0; }
 .day-category-row { padding: 11px 0; }
 .day-category-name { font-weight: 600; }
-.day-inline-form { margin-top: 10px; }
-.day-inline-form .ant-input-number, .day-inline-form .ant-input,
-.day-inline-form .ant-btn, .day-action-button { min-height: 44px; }
+.day-entry-form { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 16px; }
+.day-entry-form .ant-input-number, .day-entry-form .ant-input,
+.day-entry-form .ant-select, .day-entry-form .ant-btn,
+.day-action-button { min-height: 44px; }
+.day-category-select { min-width: 220px; flex: 1; }
+.day-new-category { min-height: 44px; }
+.day-category-totals { border-top: 1px solid #e8e8e8; }
 .day-amount-input { width: 170px; font-size: 20px; }
 .day-comment-input { min-width: 180px; flex: 1; }
 .day-entry { min-height: 54px; padding: 10px 0; }
@@ -26,6 +30,7 @@
 .day-mobile-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .day-mobile-grid .ant-btn, .day-mobile-amount, .ant-modal .ant-btn { min-height: 48px; }
 .day-mobile-amount { width: 100%; font-size: 24px; }
+.day-new-category-input { min-height: 48px; font-size: 18px; }
 
 @media (max-width: 767px) {
   .day-mobile-float { display: flex; }
@@ -34,6 +39,8 @@
   .day-toolbar .ant-picker, .day-toolbar .ant-select { min-height: 44px; }
   .day-category-card .ant-card-body, .day-entries-card .ant-card-body,
   .day-total-card .ant-card-body { padding: 16px; }
-  .day-inline-form { display: none; }
+  .day-entry-form > .ant-select, .day-entry-form > .ant-input-number,
+  .day-entry-form > .ant-input, .day-entry-form > .ant-btn { width: 100%; }
+  .day-category-select { min-height: 48px; }
   .day-entry-note { white-space: normal; }
 }

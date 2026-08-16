@@ -38,14 +38,14 @@ class FinanceApiTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(row.category, "Материалы")
+        self.assertEqual(row.category, "Материалы и химия")
 
     def test_create_transaction_uses_other_when_no_rule_matches(self):
         row = main.create_transaction(
             self.transaction_in(description="Обычная операция")
         )
 
-        self.assertEqual(row.category, "Другое")
+        self.assertEqual(row.category, "Прочее")
 
     def test_classify_recomputes_category_and_updates_optional_amount(self):
         with Session(self.engine) as session:

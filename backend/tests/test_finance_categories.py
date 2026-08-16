@@ -1,15 +1,60 @@
 import unittest
 
-from app.finance_categories import classify_finance, default_finance_category
+from app.finance_categories import (
+    EXPENSE_CATEGORIES_V1,
+    INCOME_CATEGORIES_V1,
+    classify_finance,
+    default_finance_category,
+)
 
 
 class FinanceCategoriesTest(unittest.TestCase):
+    def test_income_categories_are_exact(self):
+        self.assertEqual(
+            INCOME_CATEGORIES_V1,
+            (
+                "Химчистка",
+                "Дезинсекция",
+                "Дератизация",
+                "Дезинфекция",
+                "Обработка от клещей",
+                "Клининг",
+                "Юридические клиенты",
+                "Доход от агрегаторов",
+                "Другие работы",
+            ),
+        )
+
+    def test_expense_categories_match_seed_catalog(self):
+        self.assertEqual(
+            EXPENSE_CATEGORIES_V1,
+            (
+                "Еда",
+                "Топливо и машина",
+                "Материалы и химия",
+                "Реклама",
+                "Оборудование и инструмент",
+                "СИЗ",
+                "Прочее",
+            ),
+        )
+
     def test_classifies_requested_keywords_case_insensitively(self):
         cases = {
             "химчистка дивана": "Химчистка",
             "химчист ковра": "Химчистка",
             "дезинфекция помещения": "Дезинфекция",
             "санобработка помещения": "Дезинфекция",
+            "обработка от тараканов": "Дезинсекция",
+            "уничтожение клопов": "Дезинсекция",
+            "обработка от крыс": "Дератизация",
+            "защита от грызунов": "Дератизация",
+            "обработка участка от клещей": "Обработка от клещей",
+            "акарицидная обработка": "Обработка от клещей",
+            "генеральный клининг": "Клининг",
+            "уборка помещения": "Клининг",
+            "договор с юридическим лицом": "Юридические клиенты",
+            "выплата агрегатора": "Доход от агрегаторов",
             "еда в дороге": "Еда",
             "кафе": "Еда",
             "продукты": "Еда",
@@ -18,9 +63,14 @@ class FinanceCategoriesTest(unittest.TestCase):
             "оплатил топливо": "Топливо и машина",
             "заправка": "Топливо и машина",
             "такси до клиента": "Топливо и машина",
-            "Купил ХИМИЮ": "Материалы",
-            "материалы для обработки": "Материалы",
-            "расходники": "Материалы",
+            "Купил ХИМИЮ": "Материалы и химия",
+            "материалы для обработки": "Материалы и химия",
+            "расходники": "Материалы и химия",
+            "оплатил рекламу": "Реклама",
+            "купил оборудование": "Оборудование и инструмент",
+            "новый инструмент": "Оборудование и инструмент",
+            "защитные СИЗ": "СИЗ",
+            "купил респиратор": "СИЗ",
         }
 
         for text, expected in cases.items():
@@ -38,8 +88,8 @@ class FinanceCategoriesTest(unittest.TestCase):
 
     def test_kind_specific_fallbacks(self):
         self.assertEqual(default_finance_category("income"), "Другие работы")
-        self.assertEqual(default_finance_category("expense"), "Другое")
-        self.assertEqual(default_finance_category("unknown"), "Другое")
+        self.assertEqual(default_finance_category("expense"), "Прочее")
+        self.assertEqual(default_finance_category("unknown"), "Прочее")
 
 
 if __name__ == "__main__":

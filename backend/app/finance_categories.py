@@ -5,13 +5,22 @@ from collections.abc import Mapping
 
 INCOME_CATEGORY_KEYWORDS_V1: Mapping[str, tuple[str, ...]] = {
     "Химчистка": ("химчист",),
+    "Дезинсекция": ("дезинсек", "таракан", "клоп", "насеком"),
+    "Дератизация": ("дератиз", "крыс", "мыш", "грызун"),
     "Дезинфекция": ("дезинфек", "санобработ"),
+    "Обработка от клещей": ("клещ", "акарицид"),
+    "Клининг": ("клининг", "уборк"),
+    "Юридические клиенты": ("юридическ", "юрлиц", "договор"),
+    "Доход от агрегаторов": ("агрегатор",),
 }
 
 EXPENSE_CATEGORY_KEYWORDS_V1: Mapping[str, tuple[str, ...]] = {
     "Еда": ("еда", "кафе", "продукт", "поели"),
     "Топливо и машина": ("бензин", "топливо", "заправ", "такси"),
-    "Материалы": ("хими", "материал", "расходник"),
+    "Материалы и химия": ("хими", "материал", "расходник"),
+    "Реклама": ("реклам",),
+    "Оборудование и инструмент": ("оборудован", "инструмент"),
+    "СИЗ": ("сиз", "перчат", "респиратор", "защитн", "маск"),
 }
 
 CATEGORY_KEYWORDS_V1 = (
@@ -20,7 +29,7 @@ CATEGORY_KEYWORDS_V1 = (
 )
 
 INCOME_CATEGORIES_V1 = (*INCOME_CATEGORY_KEYWORDS_V1, "Другие работы")
-EXPENSE_CATEGORIES_V1 = (*EXPENSE_CATEGORY_KEYWORDS_V1, "Другое")
+EXPENSE_CATEGORIES_V1 = (*EXPENSE_CATEGORY_KEYWORDS_V1, "Прочее")
 
 
 def classify_finance(text: str) -> str | None:
@@ -34,4 +43,4 @@ def classify_finance(text: str) -> str | None:
 
 def default_finance_category(kind: str) -> str:
     """Вернуть утверждённую статью по умолчанию для направления операции."""
-    return "Другие работы" if kind == "income" else "Другое"
+    return "Другие работы" if kind == "income" else "Прочее"

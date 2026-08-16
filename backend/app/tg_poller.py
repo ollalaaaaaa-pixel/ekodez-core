@@ -312,7 +312,7 @@ def _handle_agent_message(token: str, engine, message: dict) -> None:
             description=description,
             kind="unknown",
             amount=Decimal("0.00"),
-            category="Другое",
+            category="Прочее",
         )
         _send_message(
             token,
