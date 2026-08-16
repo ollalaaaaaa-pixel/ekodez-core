@@ -34,6 +34,11 @@
   width: 250px;
 }
 
+.bank-confirm-panel {
+  display: grid;
+  gap: 10px;
+}
+
 @media (max-width: 767px) {
   .bank-import-drawer .ant-drawer-header,
   .bank-import-drawer .ant-drawer-body {

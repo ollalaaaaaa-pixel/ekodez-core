@@ -55,7 +55,7 @@ type BankPreviewRow = {
 
 type EditableBankRow = BankPreviewRow & {
   categoryOverride?: string
-  reviewConfirmed: boolean
+  review_confirmed: boolean
 }
 
 type ConfirmResult = {
@@ -132,8 +132,10 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
 
   const visibleRows = useMemo(() => rows.filter((row) => !row.is_transfer), [rows])
   const excludedCount = rows.length - visibleRows.length
-  const reviewReady = visibleRows.every(
-    (row) => !row.needs_review || Boolean(row.categoryOverride && row.reviewConfirmed),
+  const reviewRows = rows.filter((row) => row.needs_review)
+  const confirmedReviewCount = reviewRows.filter((row) => row.review_confirmed).length
+  const hasUnconfirmedReviews = rows.some(
+    (row) => row.needs_review && !row.review_confirmed,
   )
 
   const updateRow = (hash: string, changes: Partial<EditableBankRow>) => {
@@ -161,7 +163,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
         throw new Error(previewErrorText(payload?.detail))
       }
       const previewRows = (await response.json()) as BankPreviewRow[]
-      setRows(previewRows.map((row) => ({ ...row, reviewConfirmed: false })))
+      setRows(previewRows.map((row) => ({ ...row, review_confirmed: false })))
       if (!previewRows.length) message.info('В выписке нет операций')
     } catch (error) {
       const detail = error instanceof Error
@@ -175,7 +177,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
   }
 
   const confirmImport = async () => {
-    if (!file || !reviewReady) return
+    if (!file || hasUnconfirmedReviews) return
     setConfirmLoading(true)
     try {
       const transactions = rows.map((row) => ({
@@ -189,7 +191,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
         counterparty_inn: row.counterparty_inn,
         source_hash: row.source_hash,
         category_override: row.categoryOverride ?? null,
-        review_confirmed: row.reviewConfirmed,
+        review_confirmed: row.review_confirmed,
       }))
       const response = await fetch(API + '/api/bank/confirm', {
         method: 'POST',
@@ -258,7 +260,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
               (category) => ({ label: category, value: category }),
             )}
             onChange={(categoryOverride) =>
-              updateRow(row.source_hash, { categoryOverride, reviewConfirmed: false })
+              updateRow(row.source_hash, { categoryOverride, review_confirmed: false })
             }
           />
         ) : (
@@ -276,14 +278,14 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
       width: 180,
       render: (_, row) => {
         if (!row.needs_review) return <Tag color="green">Определено</Tag>
-        if (row.reviewConfirmed) {
+        if (row.review_confirmed) {
           return <Tag icon={<CheckOutlined />} color="green">Выбор подтверждён</Tag>
         }
         return (
           <Button
             className="bank-review-button"
             disabled={!row.categoryOverride}
-            onClick={() => updateRow(row.source_hash, { reviewConfirmed: true })}
+            onClick={() => updateRow(row.source_hash, { review_confirmed: true })}
           >
             Подтвердить выбор
           </Button>
@@ -355,7 +357,7 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
                 description="Эти строки участвуют в сверке оборотов банка, но не сохраняются как доходы или расходы."
               />
             ) : null}
-            {!reviewReady ? (
+            {hasUnconfirmedReviews ? (
               <Alert
                 type="warning"
                 showIcon
@@ -372,17 +374,31 @@ export default function BankImportDrawer({ open, onClose, onImported }: Props) {
               rowClassName={(row) => (row.needs_review ? 'bank-import-review-row' : '')}
               locale={{ emptyText: <Empty description="Все строки отсечены правилами" /> }}
             />
-            <Button
-              type="primary"
-              size="large"
-              block
-              loading={confirmLoading}
-              disabled={!visibleRows.length || !reviewReady || Boolean(result)}
-              onClick={confirmImport}
-              className="bank-confirm-button"
-            >
-              Подтвердить и сохранить
-            </Button>
+            <div className="bank-confirm-panel">
+              <Flex justify="space-between" gap={8} wrap>
+                <Typography.Text strong>
+                  Спорные строки: {confirmedReviewCount} из {reviewRows.length} подтверждены
+                </Typography.Text>
+                <Typography.Text type={hasUnconfirmedReviews ? 'warning' : 'success'}>
+                  {hasUnconfirmedReviews
+                    ? 'Кнопка заблокирована: подтвердите все спорные строки.'
+                    : 'Все спорные строки подтверждены — импорт доступен.'}
+                </Typography.Text>
+              </Flex>
+              <Button
+                type="primary"
+                size="large"
+                block
+                loading={confirmLoading}
+                disabled={
+                  !visibleRows.length || hasUnconfirmedReviews || Boolean(result)
+                }
+                onClick={confirmImport}
+                className="bank-confirm-button"
+              >
+                Подтвердить и сохранить
+              </Button>
+            </div>
           </>
         ) : null}
 
