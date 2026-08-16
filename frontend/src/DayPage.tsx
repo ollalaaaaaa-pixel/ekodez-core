@@ -13,6 +13,7 @@ const INCOME_CATEGORIES = [
   'Обработка от клещей', 'Клининг', 'Юридические клиенты',
   'Доход от агрегаторов', 'Другие работы',
 ] as const
+const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафан', 'Прочее'] as const
 
 type Kind = 'income' | 'expense'
 type CategoryTotal = { kind: Kind; category: string; total: string }
@@ -25,10 +26,14 @@ type DayData = {
   income_total: string; expense_total: string; balance: string
   categories: CategoryTotal[]; entries: DayEntry[]
 }
-type Draft = { kind: Kind; category: string; amount: number | null; comment: string }
+type Draft = {
+  kind: Kind; category: string; channel: string; amount: number | null; comment: string
+}
 type CategoryTarget = 'desktop' | 'mobile'
 
-const emptyDraft = (kind: Kind): Draft => ({ kind, category: '', amount: null, comment: '' })
+const emptyDraft = (kind: Kind): Draft => ({
+  kind, category: '', channel: '', amount: null, comment: '',
+})
 const money = (value: string | number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
 
@@ -93,6 +98,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind: draft.kind, category: draft.category, amount: draft.amount,
+          channel: draft.kind === 'income' ? draft.channel || null : null,
           comment: draft.comment || null, entered_by: enteredBy, date: selectedDate,
         }),
       })
@@ -161,6 +167,10 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
           placeholder="Выберите категорию" value={draft.category || undefined}
           onChange={(category) => setDraft({ ...draft, category })}
           options={categories.map((category) => ({ value: category, label: category }))} />
+        {kind === 'income' && <Select className="day-channel-select" allowClear
+          placeholder="Канал (необязательно)" value={draft.channel || undefined}
+          onChange={(channel) => setDraft({ ...draft, channel: channel ?? '' })}
+          options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
         {kind === 'expense' && <Button className="day-new-category"
           icon={<PlusOutlined />} onClick={() => openCategoryModal('desktop')}>Новая категория</Button>}
         <InputNumber className="day-amount-input" min={0} precision={2}
@@ -242,6 +252,10 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
             value={mobileDraft.category || undefined}
             onChange={(category) => setMobileDraft({ ...mobileDraft, category })}
             options={mobileCategories.map((category) => ({ value: category, label: category }))} />
+          {mobileDraft.kind === 'income' && <Select className="day-channel-select" allowClear
+            placeholder="Канал (необязательно)" value={mobileDraft.channel || undefined}
+            onChange={(channel) => setMobileDraft({ ...mobileDraft, channel: channel ?? '' })}
+            options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
           {mobileDraft.kind === 'expense' && <Button block className="day-new-category" icon={<PlusOutlined />}
             onClick={() => openCategoryModal('mobile')}>Новая категория</Button>}
           <InputNumber className="day-mobile-amount" min={0} precision={2} placeholder="Сумма"

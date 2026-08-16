@@ -16,6 +16,7 @@
 .day-entry-form .ant-select, .day-entry-form .ant-btn,
 .day-action-button { min-height: 44px; }
 .day-category-select { min-width: 220px; flex: 1; }
+.day-channel-select { min-width: 190px; }
 .day-new-category { min-height: 44px; }
 .day-category-totals { border-top: 1px solid #e8e8e8; }
 .day-amount-input { width: 170px; font-size: 20px; }
@@ -42,5 +43,6 @@
   .day-entry-form > .ant-select, .day-entry-form > .ant-input-number,
   .day-entry-form > .ant-input, .day-entry-form > .ant-btn { width: 100%; }
   .day-category-select { min-height: 48px; }
+  .day-channel-select { min-height: 48px; width: 100%; }
   .day-entry-note { white-space: normal; }
 }

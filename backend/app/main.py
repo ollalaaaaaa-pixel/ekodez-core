@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.channels import CHANNELS
 from app.finance_categories import (
     INCOME_CATEGORIES_V1,
     classify_finance,
@@ -47,6 +48,7 @@ class TransactionIn(BaseModel):
     currency: str = "RUB"
     counterparty: str | None = None
     description: str | None = None
+    channel: str | None = None
     kind: str = "unknown"
     review_required: bool = True
 
@@ -62,6 +64,7 @@ class TransactionOut(BaseModel):
     counterparty: str | None
     description: str | None
     category: str | None
+    channel: str | None
     kind: str
     review_required: bool
 
@@ -83,6 +86,7 @@ class DayEntryIn(BaseModel):
 
     kind: str
     category: str
+    channel: str | None = None
     amount: Decimal
     comment: str | None = None
     entered_by: str = "Артем"
@@ -98,6 +102,19 @@ class ExpenseCategoryOut(BaseModel):
 
     id: int
     name: str
+
+
+class ChannelAnalyticsItem(BaseModel):
+    channel: str
+    total_amount: Decimal
+    count: int
+    avg_check: Decimal
+    share_percent: Decimal
+
+
+class ChannelAnalyticsOut(BaseModel):
+    period_total: Decimal
+    channels: list[ChannelAnalyticsItem]
 
 
 class LeadOut(BaseModel):
@@ -152,10 +169,19 @@ def list_transactions():
         ).all()
 
 
+def _transaction_channel(kind: str, channel: str | None) -> str | None:
+    if kind != "income":
+        return None
+    if channel is not None and channel not in CHANNELS:
+        raise HTTPException(status_code=422, detail="bad channel")
+    return channel
+
+
 @app.post("/api/transactions", response_model=TransactionOut)
 def create_transaction(payload: TransactionIn):
     with Session(engine) as session:
         values = payload.model_dump()
+        values["channel"] = _transaction_channel(payload.kind, payload.channel)
         finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
         values["category"] = classify_finance(
             finance_text
@@ -209,6 +235,63 @@ def finance_summary():
         return FinanceSummary(
             income=income, expense=expense, review_count=review_count
         )
+
+
+@app.get("/api/analytics/channels", response_model=ChannelAnalyticsOut)
+def channel_analytics(
+    start_date: date = Query(), end_date: date = Query()
+):
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="bad date range")
+
+    with Session(engine) as session:
+        rows = session.execute(
+            select(
+                Transaction.channel,
+                func.sum(Transaction.amount),
+                func.count(Transaction.id),
+            )
+            .where(
+                Transaction.kind == "income",
+                Transaction.operation_date >= start_date,
+                Transaction.operation_date <= end_date,
+            )
+            .group_by(Transaction.channel)
+        ).all()
+
+    grouped: dict[str, tuple[Decimal, int]] = {}
+    for channel, total, count in rows:
+        label = channel.strip() if channel and channel.strip() else "Не указан"
+        previous_total, previous_count = grouped.get(
+            label, (Decimal("0.00"), 0)
+        )
+        grouped[label] = (
+            previous_total + Decimal(total),
+            previous_count + int(count),
+        )
+
+    cents = Decimal("0.01")
+    period_total = sum(
+        (total for total, _ in grouped.values()), Decimal("0.00")
+    ).quantize(cents)
+    channels = []
+    for channel, (total, count) in grouped.items():
+        rounded_total = total.quantize(cents)
+        channels.append(
+            {
+                "channel": channel,
+                "total_amount": rounded_total,
+                "count": count,
+                "avg_check": (total / count).quantize(cents),
+                "share_percent": (
+                    (total / period_total * Decimal("100")).quantize(cents)
+                    if period_total
+                    else Decimal("0.00")
+                ),
+            }
+        )
+    channels.sort(key=lambda row: (-row["total_amount"], row["channel"]))
+    return {"period_total": period_total, "channels": channels}
 
 
 @app.get(
@@ -363,6 +446,7 @@ def create_day_entry(payload: DayEntryIn):
             currency="RUB",
             description=payload.comment,
             category=payload.category,
+            channel=_transaction_channel(payload.kind, payload.channel),
             entered_by=payload.entered_by,
             kind=payload.kind,
             review_required=False,

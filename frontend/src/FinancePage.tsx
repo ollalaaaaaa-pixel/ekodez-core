@@ -1,6 +1,11 @@
 ﻿import { useEffect, useState } from 'react'
-import { Button, Card, Col, InputNumber, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
+import {
+  Button, Card, Col, Empty, InputNumber, Progress, Row, Segmented, Space,
+  Spin, Statistic, Table, Tag, Typography,
+} from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, EyeOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import './FinancePage.css'
 
 const API = 'http://127.0.0.1:8000'
 
@@ -23,6 +28,30 @@ type Summary = {
   review_count: number
 }
 
+type PeriodKey = 'week' | 'month' | 'quarter' | 'year'
+type ChannelMetric = {
+  channel: string
+  total_amount: string
+  count: number
+  avg_check: string
+  share_percent: string
+}
+type ChannelAnalytics = {
+  period_total: string
+  channels: ChannelMetric[]
+}
+
+const periodRange = (period: PeriodKey) => {
+  const end = dayjs()
+  if (period === 'week') return [end.subtract(6, 'day'), end] as const
+  if (period === 'quarter') return [end.subtract(2, 'month').startOf('month'), end] as const
+  if (period === 'year') return [end.startOf('year'), end] as const
+  return [end.startOf('month'), end] as const
+}
+
+const money = (value: string | number) =>
+  new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
+
 const kindLabel: Record<string, { text: string; color: string }> = {
   income: { text: 'Доход', color: 'green' },
   expense: { text: 'Расход', color: 'red' },
@@ -34,6 +63,9 @@ export default function FinancePage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [rows, setRows] = useState<Tx[]>([])
   const [draftAmounts, setDraftAmounts] = useState<Record<number, string | null>>({})
+  const [period, setPeriod] = useState<PeriodKey>('month')
+  const [channelAnalytics, setChannelAnalytics] = useState<ChannelAnalytics | null>(null)
+  const [channelLoading, setChannelLoading] = useState(true)
   const [error, setError] = useState('')
 
   const load = () => {
@@ -50,6 +82,30 @@ export default function FinancePage() {
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    const [start, end] = periodRange(period)
+    const controller = new AbortController()
+    setChannelLoading(true)
+    fetch(
+      `${API}/api/analytics/channels?start_date=${start.format('YYYY-MM-DD')}`
+      + `&end_date=${end.format('YYYY-MM-DD')}`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!response.ok) throw new Error('Не удалось загрузить аналитику каналов')
+        return response.json()
+      })
+      .then(setChannelAnalytics)
+      .catch((fetchError: unknown) => {
+        if (fetchError instanceof DOMException && fetchError.name === 'AbortError') return
+        setError('Не удалось загрузить аналитику каналов')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setChannelLoading(false)
+      })
+    return () => controller.abort()
+  }, [period])
 
   const classify = (id: number, kind: string) => {
     const amount = draftAmounts[id]
@@ -185,6 +241,49 @@ export default function FinancePage() {
         </Col>
       </Row>
       {error ? <Typography.Paragraph type="warning">{error}</Typography.Paragraph> : null}
+      <Card
+        className="channel-card"
+        title="По каналам"
+        extra={(
+          <Segmented<PeriodKey>
+            className="channel-periods"
+            value={period}
+            onChange={setPeriod}
+            options={[
+              { label: 'Неделя', value: 'week' },
+              { label: 'Месяц', value: 'month' },
+              { label: '3 месяца', value: 'quarter' },
+              { label: 'Год', value: 'year' },
+            ]}
+          />
+        )}
+      >
+        <Spin spinning={channelLoading}>
+          <Typography.Paragraph type="secondary">
+            Выручка за период: <strong>{money(channelAnalytics?.period_total ?? 0)} ₽</strong>
+          </Typography.Paragraph>
+          {!channelAnalytics?.channels.length ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Доходов за выбранный период нет" />
+          ) : (
+            <div className="channel-list">
+              {channelAnalytics.channels.map((item) => (
+                <div className="channel-item" key={item.channel}>
+                  <div className="channel-heading">
+                    <strong>{item.channel}</strong>
+                    <span>{money(item.share_percent)}%</span>
+                  </div>
+                  <Progress percent={Number(item.share_percent)} showInfo={false} />
+                  <div className="channel-metrics">
+                    <strong>{money(item.total_amount)} ₽</strong>
+                    <span>Заявок: {item.count}</span>
+                    <span>Средний чек {money(item.avg_check)} ₽</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Spin>
+      </Card>
       <Card style={{ marginTop: 16 }} title="Операции">
         <Table rowKey="id" columns={columns as any} dataSource={rows} pagination={{ pageSize: 10 }} />
       </Card>

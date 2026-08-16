@@ -1,0 +1,13 @@
+.channel-card { margin-top: 16px; }
+.channel-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.channel-item { min-width: 0; padding: 14px; border: 1px solid #f0f0f0; border-radius: 12px; }
+.channel-heading { display: flex; justify-content: space-between; gap: 12px; }
+.channel-metrics { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #595959; }
+
+@media (max-width: 767px) {
+  .channel-card .ant-card-head { align-items: flex-start; flex-direction: column; padding: 12px 16px; }
+  .channel-card .ant-card-extra { width: 100%; margin-inline-start: 0; }
+  .channel-periods { width: 100%; overflow-x: auto; }
+  .channel-list { grid-template-columns: 1fr; }
+  .channel-metrics { flex-direction: column; gap: 4px; }
+}

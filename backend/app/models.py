@@ -20,6 +20,7 @@ class Transaction(Base):
     counterparty: Mapped[str | None] = mapped_column(String(300), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     entered_by: Mapped[str] = mapped_column(String(50), default="Артем")
     kind: Mapped[str] = mapped_column(String(20), default="unknown")
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
