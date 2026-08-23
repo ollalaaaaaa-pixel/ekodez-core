@@ -4,12 +4,14 @@ import {
   CalendarOutlined,
   DollarOutlined,
   FileTextOutlined,
+  EnvironmentOutlined,
   TeamOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
 import DayPage from './DayPage'
 import FinancePage from './FinancePage'
 import LeadsPage from './LeadsPage'
+import ObjectsPage from './ObjectsPage'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -17,6 +19,7 @@ const { Title } = Typography
 const screens: Record<string, string> = {
   day: 'День',
   leads: 'Заявки',
+  objects: 'Объекты',
   finance: 'Финансы',
   clients: 'Клиенты',
   settings: 'Настройки',
@@ -37,6 +40,7 @@ export default function App() {
           items={[
             { key: 'day', icon: <CalendarOutlined />, label: 'День' },
             { key: 'leads', icon: <FileTextOutlined />, label: 'Заявки' },
+            { key: 'objects', icon: <EnvironmentOutlined />, label: 'Объекты' },
             { key: 'finance', icon: <DollarOutlined />, label: 'Финансы' },
             { key: 'clients', icon: <TeamOutlined />, label: 'Клиенты' },
             { key: 'settings', icon: <SettingOutlined />, label: 'Настройки' },
@@ -56,6 +60,8 @@ export default function App() {
             <FinancePage />
           ) : current === 'leads' ? (
             <LeadsPage />
+          ) : current === 'objects' ? (
+            <ObjectsPage />
           ) : (
             <Card>
               <p>Экран «{screens[current]}» готовится. Данные появятся после подключения модуля.</p>

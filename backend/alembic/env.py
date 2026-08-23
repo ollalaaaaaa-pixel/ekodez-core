@@ -11,7 +11,8 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND_DIR)
 load_dotenv(os.path.join(BACKEND_DIR, ".env"))
 
-from app.models import Base
+from app.db import enable_sqlite_foreign_keys  # noqa: E402
+from app.models import Base  # noqa: E402
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", ""))
@@ -35,6 +36,7 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    enable_sqlite_foreign_keys(connectable)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

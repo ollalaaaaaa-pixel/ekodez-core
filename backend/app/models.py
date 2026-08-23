@@ -2,8 +2,20 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, Numeric, String, Text, Uuid, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    Uuid,
+    func,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -49,6 +61,55 @@ class ExpenseCategory(Base):
     )
 
 
+class Contract(Base):
+    __tablename__ = "contracts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    number: Mapped[str] = mapped_column(String(100), unique=True)
+    monthly_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Object(Base):
+    __tablename__ = "objects"
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('restaurant', 'gym', 'kindergarten', 'apartment', "
+            "'office', 'other')",
+            name="ck_objects_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'warranty', 'inactive')",
+            name="ck_objects_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    address: Mapped[str] = mapped_column(String(500))
+    encrypted_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    type: Mapped[str] = mapped_column(String(30))
+    area_sqm: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    contract_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contracts.id"), nullable=True, unique=True
+    )
+    risk_points: Mapped[list[str]] = mapped_column(JSON, default=list)
+    last_treatment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_treatment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    contract: Mapped[Contract | None] = relationship()
+    clients: Mapped[list["Client"]] = relationship(back_populates="object")
+    treatments: Mapped[list["Treatment"]] = relationship(back_populates="object")
+
+
 class Lead(Base):
     __tablename__ = "leads"
 
@@ -68,6 +129,41 @@ class Lead(Base):
     status: Mapped[str] = mapped_column(String(20), default="new")
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     encrypted_pii: Mapped[str | None] = mapped_column(Text, nullable=True)
+    object_id: Mapped[int | None] = mapped_column(
+        ForeignKey("objects.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    encrypted_pii: Mapped[str | None] = mapped_column(Text, nullable=True)
+    object_id: Mapped[int] = mapped_column(ForeignKey("objects.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    object: Mapped[Object] = relationship(back_populates="clients")
+
+
+class Treatment(Base):
+    __tablename__ = "treatments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True)
+    object_id: Mapped[int] = mapped_column(ForeignKey("objects.id"))
+    chemicals_used: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    performed_at: Mapped[datetime] = mapped_column(DateTime)
+    performed_by: Mapped[str] = mapped_column(String(200))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    object: Mapped[Object] = relationship(back_populates="treatments")

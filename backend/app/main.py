@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,13 +29,29 @@ from app.bank_import import (
     classify_transaction as classify_bank_transaction,
 )
 from app.channels import CHANNELS
+from app.db import create_app_engine
 from app.finance_categories import (
     INCOME_CATEGORIES_V1,
     classify_finance,
     default_finance_category,
 )
 from app.lead_parser import parse_order_text
-from app.models import ExpenseCategory, Lead, Transaction
+from app.models import Contract, ExpenseCategory, Lead, Object, Transaction, Treatment
+from app.objects import (
+    ContractIn,
+    ObjectIn,
+    ObjectOut,
+    ObjectStatus,
+    ObjectType,
+    ObjectUpdate,
+    PiiEncryptionUnavailable,
+    TreatmentOut,
+    effective_status,
+    protect_address,
+    reveal_address,
+    serialize_object,
+    serialize_treatment,
+)
 from app.security.pii import (
     decrypt_pii,
     mask_address,
@@ -50,7 +66,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-engine = create_engine(DATABASE_URL)
+engine = create_app_engine(DATABASE_URL)
 
 app = FastAPI(title="Ekodez Core")
 
@@ -246,6 +262,184 @@ def health_db():
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
+
+
+def _contract_from_input(payload: ContractIn) -> Contract:
+    return Contract(
+        number=payload.number.strip(),
+        monthly_amount=payload.monthly_amount,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+    )
+
+
+@app.get("/api/objects", response_model=list[ObjectOut])
+def list_objects(type: ObjectType | None = None, status: ObjectStatus | None = None):
+    with Session(engine) as session:
+        statement = select(Object).order_by(Object.id.desc())
+        if type is not None:
+            statement = statement.where(Object.type == type)
+        rows = session.scalars(statement).all()
+        if status is not None:
+            rows = [row for row in rows if effective_status(row) == status]
+        return [serialize_object(row) for row in rows]
+
+
+@app.post("/api/objects", response_model=ObjectOut)
+def create_object(payload: ObjectIn):
+    try:
+        stored_address, encrypted_address = protect_address(
+            payload.type, payload.address
+        )
+    except PiiEncryptionUnavailable as error:
+        raise HTTPException(
+            status_code=503, detail="PII encryption unavailable"
+        ) from error
+    row = Object(
+        name=payload.name.strip(),
+        address=stored_address,
+        encrypted_address=encrypted_address,
+        type=payload.type,
+        area_sqm=payload.area_sqm,
+        contract=_contract_from_input(payload.contract) if payload.contract else None,
+        risk_points=payload.risk_points,
+        last_treatment_date=payload.last_treatment_date,
+        next_treatment_date=payload.next_treatment_date,
+        status=payload.status,
+    )
+    with Session(engine) as session:
+        try:
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="contract already exists"
+            ) from error
+        result = serialize_object(row)
+        print(
+            json.dumps(
+                {"event": "object_created", "object_id": row.id, "type": row.type},
+                ensure_ascii=False,
+            )
+        )
+        return result
+
+
+@app.get("/api/objects/{object_id}", response_model=ObjectOut)
+def get_object(
+    object_id: int, request: Request, response: Response, show_pii: bool = False
+):
+    with Session(engine) as session:
+        row = session.get(Object, object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not show_pii or row.type != "apartment":
+            return serialize_object(row)
+        client_host = request.client.host if request.client else ""
+        if client_host not in ("127.0.0.1", "::1"):
+            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        try:
+            full_address = reveal_address(row)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail="PII is unavailable") from error
+        response.headers["Cache-Control"] = "no-store"
+        print(
+            json.dumps(
+                {
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "event": "object_address_revealed",
+                    "object_id": row.id,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return serialize_object(row, address=full_address)
+
+
+@app.patch("/api/objects/{object_id}", response_model=ObjectOut)
+def update_object(object_id: int, payload: ObjectUpdate):
+    with Session(engine) as session:
+        row = session.get(Object, object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        changes = payload.model_dump(exclude_unset=True, exclude={"contract"})
+        new_type = changes.get("type", row.type)
+        new_address = changes.get("address")
+        if new_address is not None or ("type" in changes and new_type != row.type):
+            if new_address is None and row.type == "apartment":
+                raise HTTPException(
+                    status_code=422,
+                    detail="address is required when changing apartment type",
+                )
+            source_address = new_address or row.address
+            try:
+                protected_address = protect_address(new_type, source_address)
+            except PiiEncryptionUnavailable as error:
+                raise HTTPException(
+                    status_code=503, detail="PII encryption unavailable"
+                ) from error
+            row.address, row.encrypted_address = protected_address
+        for field, value in changes.items():
+            if field != "address":
+                setattr(row, field, value)
+        if "contract" in payload.model_fields_set:
+            old_contract = row.contract
+            if payload.contract is None:
+                row.contract = None
+                session.flush()
+                if old_contract is not None:
+                    session.delete(old_contract)
+            elif old_contract is None:
+                row.contract = _contract_from_input(payload.contract)
+            else:
+                old_contract.number = payload.contract.number
+                old_contract.monthly_amount = payload.contract.monthly_amount
+                old_contract.start_date = payload.contract.start_date
+                old_contract.end_date = payload.contract.end_date
+        try:
+            session.commit()
+            session.refresh(row)
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="constraint violation"
+            ) from error
+        return serialize_object(row)
+
+
+@app.delete("/api/objects/{object_id}", status_code=204)
+def delete_object(object_id: int):
+    with Session(engine) as session:
+        row = session.get(Object, object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if row.clients or row.treatments:
+            raise HTTPException(status_code=409, detail="object has related records")
+        linked_lead = session.scalar(select(Lead.id).where(Lead.object_id == row.id))
+        if linked_lead is not None:
+            raise HTTPException(status_code=409, detail="object has related records")
+        old_contract = row.contract
+        session.delete(row)
+        session.flush()
+        if old_contract is not None:
+            session.delete(old_contract)
+        session.commit()
+        return Response(status_code=204)
+
+
+@app.get("/api/objects/{object_id}/treatments", response_model=list[TreatmentOut])
+def list_object_treatments(object_id: int):
+    with Session(engine) as session:
+        if session.get(Object, object_id) is None:
+            raise HTTPException(status_code=404, detail="not found")
+        rows = session.scalars(
+            select(Treatment)
+            .where(Treatment.object_id == object_id)
+            .order_by(Treatment.performed_at.desc())
+        ).all()
+        return [serialize_treatment(row) for row in rows]
 
 
 @app.get("/api/transactions", response_model=list[TransactionOut])
