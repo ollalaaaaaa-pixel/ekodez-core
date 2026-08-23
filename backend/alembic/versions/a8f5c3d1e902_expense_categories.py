@@ -27,6 +27,8 @@ INITIAL_EXPENSE_CATEGORIES = (
 
 
 def upgrade() -> None:
+    dialect_name = op.get_bind().dialect.name
+    trim_name = "trim" if dialect_name == "sqlite" else "btrim"
     op.create_table(
         "expense_categories",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -49,7 +51,7 @@ def upgrade() -> None:
     op.create_index(
         "uq_expense_categories_name_lower",
         "expense_categories",
-        [sa.text("lower(btrim(name))")],
+        [sa.text(f"lower({trim_name}(name))")],
         unique=True,
     )
     categories = sa.table(
