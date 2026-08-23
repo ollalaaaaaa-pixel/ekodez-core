@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date, datetime
 from decimal import Decimal
@@ -6,7 +7,7 @@ from typing import TypedDict
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, func, select, text
@@ -35,6 +36,14 @@ from app.finance_categories import (
 )
 from app.lead_parser import parse_order_text
 from app.models import ExpenseCategory, Lead, Transaction
+from app.security.pii import (
+    decrypt_pii,
+    mask_address,
+    mask_name,
+    mask_phone,
+    pii_status,
+    protect_lead_pii,
+)
 from app.tg_poller import poller_started, start_poller
 
 load_dotenv()
@@ -228,6 +237,7 @@ def health():
     return {
         "status": "ok",
         "telegram": "started" if poller_started() else "stopped",
+        "pii": pii_status(),
     }
 
 
@@ -724,7 +734,58 @@ def delete_transaction(tx_id: int):
 @app.get("/api/leads", response_model=list[LeadOut])
 def list_leads():
     with Session(engine) as session:
-        return session.scalars(select(Lead).order_by(Lead.id.desc())).all()
+        rows = session.scalars(select(Lead).order_by(Lead.id.desc())).all()
+        return [_masked_lead(row) for row in rows]
+
+
+def _masked_lead(row: Lead) -> LeadOut:
+    result = LeadOut.model_validate(row)
+    return result.model_copy(
+        update={
+            "client_name": mask_name(row.client_name) or None,
+            "phone": mask_phone(row.phone) or None,
+            "address": mask_address(row.address) or None,
+        }
+    )
+
+
+@app.get("/api/leads/{lead_id}", response_model=LeadOut)
+def get_lead(
+    lead_id: int, request: Request, response: Response, show_pii: bool = False
+):
+    with Session(engine) as session:
+        row = session.get(Lead, lead_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not show_pii:
+            return _masked_lead(row)
+        client_host = request.client.host if request.client else ""
+        if client_host not in ("127.0.0.1", "::1"):
+            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        try:
+            full_pii = decrypt_pii(row.encrypted_pii)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail="PII is unavailable") from error
+        print(
+            json.dumps(
+                {
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "event": "pii_revealed",
+                    "lead_id": row.id,
+                },
+                ensure_ascii=False,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        result = LeadOut.model_validate(row)
+        return result.model_copy(
+            update={
+                "client_name": full_pii["client_name"],
+                "phone": full_pii["phone"],
+                "address": full_pii["address"],
+                "comment": full_pii["comment"],
+            }
+        )
 
 
 @app.post("/api/leads/ingest", response_model=LeadOut)
@@ -736,27 +797,29 @@ def ingest_lead(payload: RawTextIn):
                 select(Lead).where(Lead.external_id == data["external_id"])
             )
             if existing is not None:
-                return existing
+                return _masked_lead(existing)
+        protected = protect_lead_pii(data, payload.text)
         row = Lead(
             source="telegram",
             external_id=data["external_id"] or None,
             order_at=data["order_at"],
-            client_name=data["client_name"] or None,
-            phone=data["phone"] or None,
-            address=data["address"] or None,
+            client_name=protected["client_name"],
+            phone=protected["phone"],
+            address=protected["address"],
             area=data["area"] or None,
             reason=data["reason"] or None,
-            comment=data["comment"] or None,
+            comment=protected["comment"],
             amount_note=data["amount_note"] or None,
             contract=data["contract"] or None,
             partner=data["partner"] or None,
             status="new",
-            raw_text=payload.text,
+            raw_text=protected["raw_text"],
+            encrypted_pii=protected["encrypted_pii"],
         )
         session.add(row)
         session.commit()
         session.refresh(row)
-        return row
+        return _masked_lead(row)
 
 
 @app.post("/api/leads/{lead_id}/status", response_model=LeadOut)
@@ -770,4 +833,4 @@ def set_lead_status(lead_id: int, payload: LeadStatusIn):
         row.status = payload.status
         session.commit()
         session.refresh(row)
-        return row
+        return _masked_lead(row)

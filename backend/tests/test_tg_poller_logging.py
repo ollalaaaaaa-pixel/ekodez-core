@@ -60,7 +60,10 @@ class TelegramPollerLoggingTest(unittest.TestCase):
             count = session.scalar(select(func.count()).select_from(Lead))
         self.assertEqual(count, 1)
         self.assertEqual(result, "created")
-        self.assertIn("lead ingested: 999100", output.getvalue())
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"event": "lead_ingested", "external_id": "999100"},
+        )
 
     def test_ingest_returns_duplicate_without_creating_second_lead(self):
         engine = create_engine("sqlite:///:memory:")
@@ -163,7 +166,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
         send_message.assert_called_once_with(
             "test-token",
             77,
-            "✅ Заявка принята: Иван, Архангельск, Троицкий 1 (тараканы)",
+            "✅ Заявка принята: Иван, Архангельск, *** (тараканы)",
         )
 
     def test_loop_confirms_duplicate_personal_message(self):

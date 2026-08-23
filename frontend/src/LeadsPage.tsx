@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Button, Card, Col, Modal, Row, Space, Statistic, Table, Tag, Typography, message } from 'antd'
 import { FileTextOutlined } from '@ant-design/icons'
 
 const API = 'http://127.0.0.1:8000'
@@ -51,6 +51,24 @@ export default function LeadsPage() {
     }).then(() => load())
   }
 
+  const revealPii = (lead: Lead) => {
+    Modal.confirm({
+      title: 'Раскрыть персональные данные этой заявки?',
+      content: 'Факт раскрытия будет записан в журнал безопасности.',
+      okText: 'Да, показать',
+      cancelText: 'Отмена',
+      onOk: async () => {
+        const response = await fetch(`${API}/api/leads/${lead.id}?show_pii=true`)
+        if (!response.ok) {
+          message.error('Не удалось раскрыть данные. Проверьте локальный доступ и ключ PII.')
+          return
+        }
+        const revealed = (await response.json()) as Lead
+        setRows((current) => current.map((row) => (row.id === lead.id ? revealed : row)))
+      },
+    })
+  }
+
   const columns = [
     {
       title: 'Дата',
@@ -81,6 +99,9 @@ export default function LeadsPage() {
       key: 'actions',
       render: (_: unknown, r: Lead) => (
         <Space>
+          <Button size="small" onClick={() => revealPii(r)}>
+            Показать полностью
+          </Button>
           {r.status === 'new' ? (
             <>
               <Button size="small" type="primary" onClick={() => setStatus(r.id, 'in_work')}>

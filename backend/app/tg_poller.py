@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.finance_categories import classify_finance, default_finance_category
 from app.lead_parser import parse_order_text
 from app.models import Lead, Transaction
+from app.security.pii import mask_address, mask_name, protect_lead_pii
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OFFSET_FILE = os.path.join(BASE_DIR, "tg_offset.json")
@@ -53,25 +54,35 @@ def _ingest(engine, text: str) -> str | None:
         )
         if existing is not None:
             return "duplicate"
+        protected = protect_lead_pii(data, text)
         row = Lead(
             source="telegram",
             external_id=data["external_id"] or None,
             order_at=data["order_at"],
-            client_name=data["client_name"] or None,
-            phone=data["phone"] or None,
-            address=data["address"] or None,
+            client_name=protected["client_name"],
+            phone=protected["phone"],
+            address=protected["address"],
             area=data["area"] or None,
             reason=data["reason"] or None,
-            comment=data["comment"] or None,
+            comment=protected["comment"],
             amount_note=data["amount_note"] or None,
             contract=data["contract"] or None,
             partner=data["partner"] or None,
             status="new",
-            raw_text=text,
+            raw_text=protected["raw_text"],
+            encrypted_pii=protected["encrypted_pii"],
         )
         session.add(row)
         session.commit()
-        print(f"lead ingested: {data['external_id']}")
+        print(
+            json.dumps(
+                {
+                    "event": "lead_ingested",
+                    "external_id": data["external_id"],
+                },
+                ensure_ascii=False,
+            )
+        )
         return "created"
 
 
@@ -400,8 +411,8 @@ def _loop(token: str, engine) -> None:
                         chat_id = (message.get("chat") or {}).get("id")
                         if chat_id is not None and result == "created":
                             data = parse_order_text(text)
-                            client_name = data["client_name"] or "не указано"
-                            address = data["address"] or "не указано"
+                            client_name = mask_name(data["client_name"]) or "не указано"
+                            address = mask_address(data["address"]) or "не указано"
                             reason = data["reason"] or "не указано"
                             confirmation = (
                                 f"✅ Заявка принята: {client_name}, "

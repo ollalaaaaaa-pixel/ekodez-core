@@ -67,6 +67,7 @@ class Lead(Base):
     partner: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="new")
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_pii: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
