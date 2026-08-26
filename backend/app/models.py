@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
 )
@@ -167,3 +168,57 @@ class Treatment(Base):
     )
 
     object: Mapped[Object] = relationship(back_populates="treatments")
+    chemical_usages: Mapped[list["ChemicalUsage"]] = relationship(
+        back_populates="treatment", cascade="all, delete-orphan"
+    )
+
+
+class Inventory(Base):
+    __tablename__ = "inventory"
+    __table_args__ = (
+        UniqueConstraint(
+            "chemical_name", "batch_number", name="uq_inventory_chemical_batch"
+        ),
+        CheckConstraint("quantity >= 0", name="ck_inventory_quantity_nonnegative"),
+        CheckConstraint(
+            "initial_quantity > 0", name="ck_inventory_initial_quantity_positive"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chemical_name: Mapped[str] = mapped_column(String(200), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    initial_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    unit: Mapped[str] = mapped_column(String(30))
+    batch_number: Mapped[str] = mapped_column(String(100))
+    expiry_date: Mapped[date] = mapped_column(Date, index=True)
+    supplier: Mapped[str] = mapped_column(String(200), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    chemical_usages: Mapped[list["ChemicalUsage"]] = relationship(
+        back_populates="inventory"
+    )
+
+
+class ChemicalUsage(Base):
+    __tablename__ = "chemical_usage"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_chemical_usage_quantity_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    inventory_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory.id", ondelete="RESTRICT"), index=True
+    )
+    treatment_id: Mapped[int] = mapped_column(
+        ForeignKey("treatments.id", ondelete="CASCADE"), index=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    inventory: Mapped[Inventory] = relationship(back_populates="chemical_usages")
+    treatment: Mapped[Treatment] = relationship(back_populates="chemical_usages")

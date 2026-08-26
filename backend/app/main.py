@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.bank_import import (
     MONEY_QUANTUM,
@@ -35,8 +35,30 @@ from app.finance_categories import (
     classify_finance,
     default_finance_category,
 )
+from app.inventory import (
+    LOW_STOCK_RATIO,
+    InsufficientInventory,
+    InventoryIn,
+    InventoryNotFound,
+    InventoryOut,
+    InventoryTreatmentOut,
+    InventoryUpdate,
+    TreatmentIn,
+    create_treatment_with_inventory,
+    serialize_inventory,
+    serialize_inventory_treatment,
+)
 from app.lead_parser import parse_order_text
-from app.models import Contract, ExpenseCategory, Lead, Object, Transaction, Treatment
+from app.models import (
+    ChemicalUsage,
+    Contract,
+    ExpenseCategory,
+    Inventory,
+    Lead,
+    Object,
+    Transaction,
+    Treatment,
+)
 from app.objects import (
     ContractIn,
     ObjectIn,
@@ -271,6 +293,131 @@ def _contract_from_input(payload: ContractIn) -> Contract:
         start_date=payload.start_date,
         end_date=payload.end_date,
     )
+
+
+@app.get("/api/inventory", response_model=list[InventoryOut])
+def list_inventory(
+    search: str | None = Query(default=None, max_length=200),
+    supplier: str | None = Query(default=None, max_length=200),
+    unit: str | None = Query(default=None, max_length=30),
+    low_stock: bool | None = None,
+):
+    with Session(engine) as session:
+        statement = select(Inventory).order_by(
+            Inventory.chemical_name, Inventory.expiry_date, Inventory.id
+        )
+        if search:
+            pattern = f"%{search.strip()}%"
+            statement = statement.where(
+                or_(
+                    Inventory.chemical_name.ilike(pattern),
+                    Inventory.batch_number.ilike(pattern),
+                )
+            )
+        if supplier:
+            statement = statement.where(Inventory.supplier == supplier.strip())
+        if unit:
+            statement = statement.where(Inventory.unit == unit.strip())
+        if low_stock is not None:
+            low_expression = (
+                Inventory.quantity < Inventory.initial_quantity * LOW_STOCK_RATIO
+            )
+            statement = statement.where(
+                low_expression if low_stock else ~low_expression
+            )
+        return [serialize_inventory(row) for row in session.scalars(statement).all()]
+
+
+@app.post("/api/inventory", response_model=InventoryOut)
+def create_inventory(payload: InventoryIn):
+    row = Inventory(**payload.model_dump(), initial_quantity=payload.quantity)
+    with Session(engine) as session:
+        try:
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="inventory batch already exists"
+            ) from error
+        return serialize_inventory(row)
+
+
+@app.patch("/api/inventory/{inventory_id}", response_model=InventoryOut)
+def update_inventory(inventory_id: int, payload: InventoryUpdate):
+    with Session(engine) as session:
+        row = session.get(Inventory, inventory_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(row, field, value)
+        try:
+            session.commit()
+            session.refresh(row)
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="constraint violation"
+            ) from error
+        return serialize_inventory(row)
+
+
+@app.delete("/api/inventory/{inventory_id}", status_code=204)
+def delete_inventory(inventory_id: int):
+    with Session(engine) as session:
+        row = session.get(Inventory, inventory_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        linked_usage = session.scalar(
+            select(ChemicalUsage.id).where(ChemicalUsage.inventory_id == inventory_id)
+        )
+        if linked_usage is not None:
+            raise HTTPException(status_code=409, detail="inventory has usage history")
+        session.delete(row)
+        session.commit()
+        return Response(status_code=204)
+
+
+@app.get("/api/treatments", response_model=list[InventoryTreatmentOut])
+def list_treatments():
+    with Session(engine) as session:
+        rows = session.scalars(
+            select(Treatment)
+            .options(
+                selectinload(Treatment.chemical_usages).selectinload(
+                    ChemicalUsage.inventory
+                )
+            )
+            .order_by(Treatment.performed_at.desc(), Treatment.id.desc())
+        ).all()
+        return [serialize_inventory_treatment(row) for row in rows]
+
+
+@app.post("/api/treatments", response_model=InventoryTreatmentOut)
+def create_treatment(payload: TreatmentIn):
+    with Session(engine) as session:
+        try:
+            row = create_treatment_with_inventory(session, payload)
+            result = serialize_inventory_treatment(row)
+        except InventoryNotFound as error:
+            session.rollback()
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InsufficientInventory as error:
+            session.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        print(
+            json.dumps(
+                {
+                    "event": "treatment_created",
+                    "treatment_id": row.id,
+                    "object_id": row.object_id,
+                    "chemical_count": len(row.chemical_usages),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return result
 
 
 @app.get("/api/objects", response_model=list[ObjectOut])
