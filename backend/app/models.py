@@ -46,9 +46,14 @@ class Transaction(Base):
     import_batch_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    object_id: Mapped[int | None] = mapped_column(
+        ForeignKey("objects.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+    object: Mapped["Object | None"] = relationship()
 
 
 class ExpenseCategory(Base):

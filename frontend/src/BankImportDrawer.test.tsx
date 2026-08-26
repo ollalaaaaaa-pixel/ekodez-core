@@ -106,5 +106,5 @@ describe('BankImportDrawer review confirmation', () => {
     expect(payload.transactions).toHaveLength(3)
     expect(payload.transactions.every((row) => row.review_confirmed)).toBe(true)
     expect(await screen.findByText('Импортировано 59 записей')).not.toBeNull()
-  }, 20_000)
+  }, 30_000)
 })

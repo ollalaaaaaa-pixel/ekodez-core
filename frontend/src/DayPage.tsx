@@ -18,6 +18,7 @@ const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафа
 type Kind = 'income' | 'expense'
 type CategoryTotal = { kind: Kind; category: string; total: string }
 type ExpenseCategory = { id: number; name: string }
+type ObjectOption = { id: number; name: string }
 type DayEntry = {
   id: number; kind: Kind; category: string; amount: string; description: string | null
   entered_by: string; time: string; source: string; can_delete: boolean
@@ -28,11 +29,12 @@ type DayData = {
 }
 type Draft = {
   kind: Kind; category: string; channel: string; amount: number | null; comment: string
+  objectId: number | null
 }
 type CategoryTarget = 'desktop' | 'mobile'
 
 const emptyDraft = (kind: Kind): Draft => ({
-  kind, category: '', channel: '', amount: null, comment: '',
+  kind, category: '', channel: '', amount: null, comment: '', objectId: null,
 })
 const money = (value: string | number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
@@ -43,6 +45,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
   const [enteredBy, setEnteredBy] = useState('Артем')
   const [data, setData] = useState<DayData | null>(null)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [objects, setObjects] = useState<ObjectOption[]>([])
   const [newLeads, setNewLeads] = useState(0)
   const [reviewCount, setReviewCount] = useState(0)
   const [telegramStarted, setTelegramStarted] = useState(false)
@@ -63,10 +66,10 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
       const responses = await Promise.all([
         fetch(`${API}/api/day?date=${selectedDate}`), fetch(`${API}/api/leads`),
         fetch(`${API}/api/finance/summary`), fetch(`${API}/health`),
-        fetch(`${API}/api/expense-categories`),
+        fetch(`${API}/api/expense-categories`), fetch(`${API}/api/objects`),
       ])
       if (responses.some((response) => !response.ok)) throw new Error('Не удалось загрузить дневник')
-      const [dayData, leads, summary, health, expenses] = await Promise.all(
+      const [dayData, leads, summary, health, expenses, objectRows] = await Promise.all(
         responses.map((response) => response.json()),
       )
       setData(dayData)
@@ -74,6 +77,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
       setReviewCount(summary.review_count ?? 0)
       setTelegramStarted(health.telegram === 'started')
       setExpenseCategories(expenses)
+      setObjects(objectRows)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Ошибка загрузки')
     } finally {
@@ -99,6 +103,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
         body: JSON.stringify({
           kind: draft.kind, category: draft.category, amount: draft.amount,
           channel: draft.kind === 'income' ? draft.channel || null : null,
+          object_id: draft.kind === 'income' ? draft.objectId : null,
           comment: draft.comment || null, entered_by: enteredBy, date: selectedDate,
         }),
       })
@@ -171,6 +176,11 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
           placeholder="Не указан" value={draft.channel || undefined}
           onChange={(channel) => setDraft({ ...draft, channel: channel ?? '' })}
           options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
+        {kind === 'income' && <Select className="day-object-select" allowClear showSearch
+          aria-label="Объект дохода" optionFilterProp="label" placeholder="Объект (необязательно)"
+          value={draft.objectId ?? undefined}
+          onChange={(objectId) => setDraft({ ...draft, objectId: objectId ?? null })}
+          options={objects.map((item) => ({ value: item.id, label: item.name }))} />}
         {kind === 'expense' && <Button className="day-new-category"
           icon={<PlusOutlined />} onClick={() => openCategoryModal('desktop')}>Новая категория</Button>}
         <InputNumber className="day-amount-input" min={0} precision={2}
@@ -256,6 +266,11 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
             placeholder="Не указан" value={mobileDraft.channel || undefined}
             onChange={(channel) => setMobileDraft({ ...mobileDraft, channel: channel ?? '' })}
             options={CHANNELS.map((channel) => ({ value: channel, label: channel }))} />}
+          {mobileDraft.kind === 'income' && <Select className="day-object-select" allowClear showSearch
+            aria-label="Объект дохода" optionFilterProp="label" placeholder="Объект (необязательно)"
+            value={mobileDraft.objectId ?? undefined}
+            onChange={(objectId) => setMobileDraft({ ...mobileDraft, objectId: objectId ?? null })}
+            options={objects.map((item) => ({ value: item.id, label: item.name }))} />}
           {mobileDraft.kind === 'expense' && <Button block className="day-new-category" icon={<PlusOutlined />}
             onClick={() => openCategoryModal('mobile')}>Новая категория</Button>}
           <InputNumber className="day-mobile-amount" min={0} precision={2} placeholder="Сумма"

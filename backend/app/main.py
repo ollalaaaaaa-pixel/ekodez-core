@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TypedDict
@@ -115,6 +115,7 @@ class TransactionIn(BaseModel):
     channel: str | None = None
     kind: str = "unknown"
     review_required: bool = True
+    object_id: int | None = None
 
 
 class TransactionOut(BaseModel):
@@ -131,6 +132,8 @@ class TransactionOut(BaseModel):
     channel: str | None
     kind: str
     review_required: bool
+    object_id: int | None
+    object_name: str | None
 
 
 class FinanceSummary(BaseModel):
@@ -145,6 +148,10 @@ class ClassifyIn(BaseModel):
     amount: Decimal | None = None
 
 
+class TransactionObjectIn(BaseModel):
+    object_id: int | None
+
+
 class DayEntryIn(BaseModel):
     model_config = {"populate_by_name": True}
 
@@ -155,6 +162,46 @@ class DayEntryIn(BaseModel):
     comment: str | None = None
     entered_by: str = "Артем"
     entry_date: date | None = Field(default=None, alias="date")
+    object_id: int | None = None
+
+
+class DashboardBestDay(BaseModel):
+    date: date
+    revenue: str
+
+
+class DashboardObject(BaseModel):
+    object_id: int
+    name: str
+    revenue: str
+
+
+class DashboardService(BaseModel):
+    category: str
+    revenue: str
+
+
+class DashboardDaily(BaseModel):
+    date: date
+    revenue: str
+    expenses: str
+    profit: str
+
+
+class DashboardOut(BaseModel):
+    revenue: str
+    expenses: str
+    profit: str
+    margin_pct: str
+    total_leads: int
+    closed_leads: int
+    conversion_rate: str
+    average_check: str
+    best_day: DashboardBestDay | None
+    top_objects: list[DashboardObject]
+    top_services: list[DashboardService]
+    unassigned_revenue: str
+    daily: list[DashboardDaily]
 
 
 class ExpenseCategoryIn(BaseModel):
@@ -592,11 +639,46 @@ def list_object_treatments(object_id: int):
 @app.get("/api/transactions", response_model=list[TransactionOut])
 def list_transactions():
     with Session(engine) as session:
-        return session.scalars(
+        rows = session.scalars(
             select(Transaction).order_by(
                 Transaction.operation_date.desc(), Transaction.id.desc()
             )
         ).all()
+        return [_transaction_out(session, row) for row in rows]
+
+
+def _transaction_out(session: Session, row: Transaction) -> TransactionOut:
+    object_name = None
+    if row.object_id is not None:
+        service_object = session.get(Object, row.object_id)
+        object_name = service_object.name if service_object is not None else None
+    return TransactionOut(
+        id=row.id,
+        source=row.source,
+        operation_date=row.operation_date,
+        amount=row.amount,
+        currency=row.currency,
+        counterparty=row.counterparty,
+        description=row.description,
+        category=row.category,
+        channel=row.channel,
+        kind=row.kind,
+        review_required=row.review_required,
+        object_id=row.object_id,
+        object_name=object_name,
+    )
+
+
+def _validated_transaction_object(
+    session: Session, kind: str, object_id: int | None
+) -> int | None:
+    if object_id is None:
+        return None
+    if kind != "income":
+        raise HTTPException(status_code=422, detail="only income can link object")
+    if session.get(Object, object_id) is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    return object_id
 
 
 def _transaction_channel(kind: str, channel: str | None) -> str | None:
@@ -612,6 +694,9 @@ def create_transaction(payload: TransactionIn):
     with Session(engine) as session:
         values = payload.model_dump()
         values["channel"] = _transaction_channel(payload.kind, payload.channel)
+        values["object_id"] = _validated_transaction_object(
+            session, payload.kind, payload.object_id
+        )
         finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
         values["category"] = classify_finance(finance_text) or default_finance_category(
             payload.kind
@@ -620,7 +705,7 @@ def create_transaction(payload: TransactionIn):
         session.add(row)
         session.commit()
         session.refresh(row)
-        return row
+        return _transaction_out(session, row)
 
 
 @app.post("/api/transactions/{tx_id}/classify", response_model=TransactionOut)
@@ -632,6 +717,8 @@ def classify_transaction(tx_id: int, payload: ClassifyIn):
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
         row.kind = payload.kind
+        if payload.kind != "income":
+            row.object_id = None
         row.review_required = payload.review_required
         if payload.amount is not None:
             row.amount = payload.amount
@@ -641,7 +728,21 @@ def classify_transaction(tx_id: int, payload: ClassifyIn):
         )
         session.commit()
         session.refresh(row)
-        return row
+        return _transaction_out(session, row)
+
+
+@app.patch("/api/transactions/{tx_id}/object", response_model=TransactionOut)
+def link_transaction_object(tx_id: int, payload: TransactionObjectIn):
+    with Session(engine) as session:
+        row = session.get(Transaction, tx_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        row.object_id = _validated_transaction_object(
+            session, row.kind, payload.object_id
+        )
+        session.commit()
+        session.refresh(row)
+        return _transaction_out(session, row)
 
 
 @app.get("/api/finance/summary", response_model=FinanceSummary)
@@ -720,6 +821,130 @@ def channel_analytics(start_date: date = Query(), end_date: date = Query()):
         )
     channels.sort(key=lambda row: (-row["total_amount"], row["channel"]))
     return {"period_total": period_total, "channels": channels}
+
+
+@app.get("/api/analytics/dashboard", response_model=DashboardOut)
+def dashboard_analytics(start_date: date = Query(), end_date: date = Query()):
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="bad date range")
+
+    with Session(engine) as session:
+        transactions = session.scalars(
+            select(Transaction).where(
+                Transaction.operation_date >= start_date,
+                Transaction.operation_date <= end_date,
+                Transaction.kind.in_(("income", "expense")),
+                Transaction.review_required == False,
+            )
+        ).all()
+        period_start = datetime.combine(start_date, datetime.min.time())
+        period_end = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+        lead_date = func.coalesce(Lead.order_at, Lead.created_at)
+        leads = session.scalars(
+            select(Lead).where(
+                lead_date >= period_start,
+                lead_date < period_end,
+            )
+        ).all()
+        object_names = {
+            row.id: row.name for row in session.scalars(select(Object)).all()
+        }
+
+    zero = Decimal("0.00")
+    revenue = sum((row.amount for row in transactions if row.kind == "income"), zero)
+    expenses = sum((row.amount for row in transactions if row.kind == "expense"), zero)
+    profit = revenue - expenses
+    margin_pct = profit / revenue * Decimal("100") if revenue else zero
+    unassigned_revenue = sum(
+        (
+            row.amount
+            for row in transactions
+            if row.kind == "income" and row.object_id is None
+        ),
+        zero,
+    )
+
+    total_leads = len(leads)
+    closed_leads = sum(lead.status == "done" for lead in leads)
+    conversion_rate = (
+        Decimal(closed_leads) / Decimal(total_leads) * Decimal("100")
+        if total_leads
+        else zero
+    )
+    average_check = revenue / Decimal(closed_leads) if closed_leads else zero
+
+    daily_values: dict[date, dict[str, Decimal]] = {}
+    object_values: dict[int, Decimal] = {}
+    service_values: dict[str, Decimal] = {}
+    for row in transactions:
+        daily_value = daily_values.setdefault(
+            row.operation_date, {"revenue": zero, "expenses": zero}
+        )
+        if row.kind == "income":
+            daily_value["revenue"] += row.amount
+            category = row.category or default_finance_category("income")
+            service_values[category] = service_values.get(category, zero) + row.amount
+            if row.object_id is not None:
+                object_values[row.object_id] = (
+                    object_values.get(row.object_id, zero) + row.amount
+                )
+        else:
+            daily_value["expenses"] += row.amount
+
+    daily = [
+        DashboardDaily(
+            date=day,
+            revenue=_money(values["revenue"]),
+            expenses=_money(values["expenses"]),
+            profit=_money(values["revenue"] - values["expenses"]),
+        )
+        for day, values in sorted(daily_values.items())
+    ]
+    revenue_days = [item for item in daily if Decimal(item.revenue) > zero]
+    best_day = (
+        max(
+            revenue_days,
+            key=lambda item: (Decimal(item.revenue), -item.date.toordinal()),
+        )
+        if revenue_days
+        else None
+    )
+    top_objects = [
+        DashboardObject(
+            object_id=object_id,
+            name=object_names.get(object_id, f"Объект #{object_id}"),
+            revenue=_money(total),
+        )
+        for object_id, total in sorted(
+            object_values.items(), key=lambda item: (-item[1], item[0])
+        )[:3]
+    ]
+    top_services = [
+        DashboardService(category=category, revenue=_money(total))
+        for category, total in sorted(
+            service_values.items(), key=lambda item: (-item[1], item[0])
+        )[:3]
+    ]
+
+    return DashboardOut(
+        revenue=_money(revenue),
+        expenses=_money(expenses),
+        profit=_money(profit),
+        margin_pct=_money(margin_pct),
+        total_leads=total_leads,
+        closed_leads=closed_leads,
+        conversion_rate=_money(conversion_rate),
+        average_check=_money(average_check),
+        best_day=(
+            DashboardBestDay(date=best_day.date, revenue=best_day.revenue)
+            if best_day is not None
+            else None
+        ),
+        top_objects=top_objects,
+        top_services=top_services,
+        unassigned_revenue=_money(unassigned_revenue),
+        daily=daily,
+    )
 
 
 @app.get("/api/expense-categories", response_model=list[ExpenseCategoryOut])
@@ -1028,6 +1253,8 @@ def create_day_entry(payload: DayEntryIn):
         raise HTTPException(status_code=422, detail="bad kind")
     if payload.kind == "income" and payload.category not in INCOME_CATEGORIES_V1:
         raise HTTPException(status_code=422, detail="bad category")
+    if payload.kind == "expense" and payload.object_id is not None:
+        raise HTTPException(status_code=422, detail="only income can link object")
     if payload.amount < 0:
         raise HTTPException(status_code=422, detail="bad amount")
 
@@ -1052,11 +1279,14 @@ def create_day_entry(payload: DayEntryIn):
             entered_by=payload.entered_by,
             kind=payload.kind,
             review_required=False,
+            object_id=_validated_transaction_object(
+                session, payload.kind, payload.object_id
+            ),
         )
         session.add(row)
         session.commit()
         session.refresh(row)
-        return row
+        return _transaction_out(session, row)
 
 
 @app.delete("/api/transactions/{tx_id}")

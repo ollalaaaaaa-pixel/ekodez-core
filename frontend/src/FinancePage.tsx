@@ -1,7 +1,7 @@
 ﻿import { useEffect, useState } from 'react'
 import {
-  Button, Card, Col, Empty, InputNumber, Progress, Row, Segmented, Space,
-  Spin, Statistic, Table, Tag, Typography,
+  Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Segmented, Select, Space,
+  Spin, Statistic, Table, Tag, Typography, message,
 } from 'antd'
 import {
   ArrowDownOutlined, ArrowUpOutlined, EyeOutlined, UploadOutlined,
@@ -23,7 +23,11 @@ type Tx = {
   category: string | null
   kind: string
   review_required: boolean
+  object_id: number | null
+  object_name: string | null
 }
+
+type ObjectOption = { id: number; name: string }
 
 type Summary = {
   income: string
@@ -71,6 +75,10 @@ export default function FinancePage() {
   const [channelLoading, setChannelLoading] = useState(true)
   const [analyticsRefresh, setAnalyticsRefresh] = useState(0)
   const [bankImportOpen, setBankImportOpen] = useState(false)
+  const [objects, setObjects] = useState<ObjectOption[]>([])
+  const [linking, setLinking] = useState<Tx | null>(null)
+  const [selectedObjectId, setSelectedObjectId] = useState<number | null>(null)
+  const [linkSaving, setLinkSaving] = useState(false)
   const [error, setError] = useState('')
 
   const load = () => {
@@ -82,6 +90,10 @@ export default function FinancePage() {
       .then((r) => r.json())
       .then(setRows)
       .catch(() => setError('Бэкенд недоступен. Запусти uvicorn.'))
+    fetch(API + '/api/objects')
+      .then((r) => r.json())
+      .then(setObjects)
+      .catch(() => setError('Не удалось загрузить объекты'))
   }
 
   useEffect(() => {
@@ -128,6 +140,27 @@ export default function FinancePage() {
         ...(amount !== undefined && amount !== null ? { amount } : {}),
       }),
     }).then(() => load())
+  }
+
+  const saveObjectLink = async () => {
+    if (!linking) return
+    setLinkSaving(true)
+    try {
+      const response = await fetch(`${API}/api/transactions/${linking.id}/object`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ object_id: selectedObjectId }),
+      })
+      if (!response.ok) throw new Error('Не удалось привязать объект')
+      setLinking(null)
+      load()
+      setAnalyticsRefresh((value) => value + 1)
+      message.success(selectedObjectId === null ? 'Привязка снята' : 'Объект привязан')
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : 'Ошибка привязки')
+    } finally {
+      setLinkSaving(false)
+    }
   }
 
   const columns = [
@@ -182,11 +215,17 @@ export default function FinancePage() {
         ),
     },
     {
+      title: 'Объект',
+      key: 'object',
+      render: (_: unknown, r: Tx) => r.object_name ?? 'Не привязан',
+    },
+    {
       title: 'Действие',
       key: 'actions',
-      render: (_: unknown, r: Tx) =>
-        r.review_required ? (
-          <Space>
+      render: (_: unknown, r: Tx) => (
+        <Space wrap>
+          {r.review_required ? (
+            <>
             <InputNumber
               aria-label="Сумма операции"
               min="0"
@@ -207,8 +246,18 @@ export default function FinancePage() {
             <Button size="small" danger onClick={() => classify(r.id, 'expense')}>
               Расход
             </Button>
-          </Space>
-        ) : null,
+            </>
+          ) : null}
+          {r.kind === 'income' ? (
+            <Button size="small" onClick={() => {
+              setLinking(r)
+              setSelectedObjectId(r.object_id)
+            }}>
+              Привязать объект
+            </Button>
+          ) : null}
+        </Space>
+      ),
     },
   ]
 
@@ -312,6 +361,30 @@ export default function FinancePage() {
         onClose={() => setBankImportOpen(false)}
         onImported={handleImported}
       />
+      <Modal
+        title="Привязать объект"
+        open={linking !== null}
+        confirmLoading={linkSaving}
+        okText="Сохранить привязку"
+        cancelText="Отмена"
+        onOk={() => void saveObjectLink()}
+        onCancel={() => setLinking(null)}
+      >
+        <Select
+          aria-label="Объект"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="Выберите объект"
+          value={selectedObjectId ?? undefined}
+          onChange={(value) => setSelectedObjectId(value ?? null)}
+          options={objects.map((item) => ({ value: item.id, label: item.name }))}
+          style={{ width: '100%' }}
+        />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+          Сопоставление выполняется только вручную. Описание и контрагент не используются.
+        </Typography.Paragraph>
+      </Modal>
     </div>
   )
 }

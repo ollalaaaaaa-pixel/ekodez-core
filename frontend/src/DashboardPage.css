@@ -1,0 +1,15 @@
+.dashboard-page { display: grid; gap: 16px; }
+.dashboard-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.dashboard-toolbar h3 { margin: 0; }
+.dashboard-section { margin-top: 0; }
+.dashboard-best-day-value { margin-top: 4px; font-size: 20px; font-weight: 600; }
+.dashboard-chart-wrap { overflow-x: auto; }
+.dashboard-chart { display: block; width: 100%; min-width: 520px; height: 220px; }
+.chart-axis { stroke: #d9d9d9; stroke-width: 1; }
+.chart-revenue, .chart-profit { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.chart-revenue { stroke: #1677ff; }
+.chart-profit { stroke: #52c41a; }
+.chart-legend { display: flex; align-items: center; justify-content: center; gap: 8px; color: #595959; }
+.revenue-dot, .profit-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.revenue-dot { background: #1677ff; }
+.profit-dot { background: #52c41a; margin-left: 12px; }

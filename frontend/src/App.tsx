@@ -3,6 +3,7 @@ import { Layout, Menu, Typography, Card } from 'antd'
 import {
   CalendarOutlined,
   DollarOutlined,
+  DashboardOutlined,
   FileTextOutlined,
   EnvironmentOutlined,
   ExperimentOutlined,
@@ -14,6 +15,7 @@ import FinancePage from './FinancePage'
 import LeadsPage from './LeadsPage'
 import ObjectsPage from './ObjectsPage'
 import InventoryPage from './InventoryPage'
+import DashboardPage from './DashboardPage'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -24,6 +26,7 @@ const screens: Record<string, string> = {
   objects: 'Объекты',
   inventory: 'Склад',
   finance: 'Финансы',
+  dashboard: 'Дашборд',
   clients: 'Клиенты',
   settings: 'Настройки',
 }
@@ -46,6 +49,7 @@ export default function App() {
             { key: 'objects', icon: <EnvironmentOutlined />, label: 'Объекты' },
             { key: 'inventory', icon: <ExperimentOutlined />, label: 'Склад' },
             { key: 'finance', icon: <DollarOutlined />, label: 'Финансы' },
+            { key: 'dashboard', icon: <DashboardOutlined />, label: 'Дашборд' },
             { key: 'clients', icon: <TeamOutlined />, label: 'Клиенты' },
             { key: 'settings', icon: <SettingOutlined />, label: 'Настройки' },
           ]}
@@ -68,6 +72,8 @@ export default function App() {
             <ObjectsPage />
           ) : current === 'inventory' ? (
             <InventoryPage />
+          ) : current === 'dashboard' ? (
+            <DashboardPage />
           ) : (
             <Card>
               <p>Экран «{screens[current]}» готовится. Данные появятся после подключения модуля.</p>
