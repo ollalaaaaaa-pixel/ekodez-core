@@ -121,6 +121,11 @@ def _send_message(
     return False
 
 
+def send_message(token: str, chat_id: int, text: str) -> bool:
+    """Отправить обычное Telegram-сообщение без клавиатуры."""
+    return _send_message(token, chat_id, text)
+
+
 def _telegram_post(token: str, method: str, payload: dict) -> bool:
     url = "https://api.telegram.org/bot" + token + "/" + method
     body = json.dumps(payload).encode("utf-8")

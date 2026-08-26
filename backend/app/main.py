@@ -1,10 +1,11 @@
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
@@ -74,6 +75,13 @@ from app.objects import (
     serialize_object,
     serialize_treatment,
 )
+from app.reports.daily import (
+    ManualReportCooldown,
+    ReportsConfigurationError,
+    TelegramDeliveryError,
+    send_daily_report,
+)
+from app.reports.scheduler import reports_status, start_report_scheduler
 from app.security.pii import (
     decrypt_pii,
     mask_address,
@@ -103,6 +111,7 @@ app.add_middleware(
 @app.on_event("startup")
 def _start_telegram_poller() -> None:
     start_poller(engine)
+    start_report_scheduler(engine)
 
 
 class TransactionIn(BaseModel):
@@ -317,12 +326,20 @@ class LeadStatusIn(BaseModel):
     status: str
 
 
+class DailyReportSendOut(BaseModel):
+    status: str
+    report_date: date
+    sent_at: datetime
+    recipient_key: str
+
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
         "telegram": "started" if poller_started() else "stopped",
         "pii": pii_status(),
+        "reports": reports_status(),
     }
 
 
@@ -331,6 +348,39 @@ def health_db():
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
+
+
+@app.post("/api/reports/daily/send", response_model=DailyReportSendOut)
+def send_daily_report_manually(request: Request):
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(
+            status_code=403, detail="daily report send is localhost only"
+        )
+    try:
+        result = send_daily_report(
+            engine, "manual", datetime.now(ZoneInfo("Europe/Moscow"))
+        )
+    except ManualReportCooldown as error:
+        raise HTTPException(
+            status_code=429,
+            detail="manual daily report is on cooldown",
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+    except ReportsConfigurationError as error:
+        raise HTTPException(
+            status_code=503, detail="daily reports are not configured"
+        ) from error
+    except TelegramDeliveryError as error:
+        raise HTTPException(
+            status_code=502, detail="Telegram delivery failed"
+        ) from error
+    return DailyReportSendOut(
+        status=result.status,
+        report_date=result.report_date,
+        sent_at=result.sent_at,
+        recipient_key=result.recipient_key,
+    )
 
 
 def _contract_from_input(payload: ContractIn) -> Contract:
@@ -1401,6 +1451,10 @@ def set_lead_status(lead_id: int, payload: LeadStatusIn):
         row = session.get(Lead, lead_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        if payload.status == "done" and row.status != "done":
+            row.closed_at = datetime.now(UTC)
+        elif payload.status != "done":
+            row.closed_at = None
         row.status = payload.status
         session.commit()
         session.refresh(row)

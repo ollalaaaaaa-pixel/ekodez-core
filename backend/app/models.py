@@ -9,12 +9,16 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     Uuid,
     func,
+)
+from sqlalchemy import (
+    text as sql_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -138,6 +142,38 @@ class Lead(Base):
     object_id: Mapped[int | None] = mapped_column(
         ForeignKey("objects.id"), nullable=True
     )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SentReport(Base):
+    __tablename__ = "sent_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "report_type IN ('auto', 'manual')",
+            name="ck_sent_reports_report_type",
+        ),
+        CheckConstraint("status IN ('sent', 'failed')", name="ck_sent_reports_status"),
+        Index(
+            "uq_sent_reports_successful_auto_recipient_date",
+            "report_date",
+            "recipient_key",
+            unique=True,
+            sqlite_where=sql_text("status = 'sent' AND report_type = 'auto'"),
+            postgresql_where=sql_text("status = 'sent' AND report_type = 'auto'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_date: Mapped[date] = mapped_column(Date, index=True)
+    report_type: Mapped[str] = mapped_column(String(20))
+    recipient_key: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20))
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
