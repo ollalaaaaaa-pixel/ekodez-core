@@ -19,20 +19,9 @@ import {
 import type { TableColumnsType } from 'antd'
 import { CheckOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons'
 import './BankImportDrawer.css'
+import { INCOME_CATEGORIES } from './dictionaries'
 
 const API = 'http://127.0.0.1:8000'
-
-const INCOME_CATEGORIES = [
-  'Химчистка',
-  'Дезинсекция',
-  'Дератизация',
-  'Дезинфекция',
-  'Обработка от клещей',
-  'Клининг',
-  'Юридические клиенты',
-  'Доход от агрегаторов',
-  'Другие работы',
-]
 
 type BankPreviewRow = {
   operation_type: string

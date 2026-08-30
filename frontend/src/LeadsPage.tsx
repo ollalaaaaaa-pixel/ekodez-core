@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Col, Modal, Row, Space, Statistic, Table, Tag, Typography, message } from 'antd'
-import { FileTextOutlined } from '@ant-design/icons'
+import {
+  Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
+  Statistic, Table, Tag, Typography, message,
+} from 'antd'
+import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
+import { INCOME_CATEGORIES, LEAD_SOURCES, LEAD_SOURCE_LABELS } from './dictionaries'
 
 const API = 'http://127.0.0.1:8000'
 
 type Lead = {
   id: number
   source: string
+  category: string | null
   external_id: string | null
   order_at: string | null
   client_name: string | null
@@ -31,6 +36,9 @@ const statusLabel: Record<string, { text: string; color: string }> = {
 export default function LeadsPage() {
   const [rows, setRows] = useState<Lead[]>([])
   const [error, setError] = useState('')
+  const [intakeOpen, setIntakeOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm()
 
   const load = () => {
     fetch(API + '/api/leads')
@@ -49,6 +57,50 @@ export default function LeadsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: status }),
     }).then(() => load())
+  }
+
+  const createLead = async (values: {
+    source: string
+    category: string
+    clientName: string
+    phone: string
+    address: string
+    amount?: number
+    comment?: string
+  }) => {
+    const lines = [
+      `Имя клиента: ${values.clientName}`,
+      `Телефон: ${values.phone}`,
+      `Адрес: ${values.address}`,
+      `Причина обращения: ${values.category}`,
+    ]
+    if (values.amount !== undefined && values.amount !== null) {
+      lines.push(`Сумма: ${values.amount.toFixed(2)}`)
+    }
+    if (values.comment?.trim()) lines.push(`Комментарий: ${values.comment.trim()}`)
+
+    setSaving(true)
+    try {
+      const response = await fetch(`${API}/api/leads/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: lines.join('\n'),
+          source: values.source,
+          category: values.category,
+        }),
+      })
+      if (!response.ok) throw new Error('lead ingest failed')
+      const created = (await response.json()) as Lead
+      setRows((current) => [created, ...current])
+      form.resetFields()
+      setIntakeOpen(false)
+      message.success('Заявка сохранена')
+    } catch {
+      message.error('Не удалось сохранить заявку')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const revealPii = (lead: Lead) => {
@@ -79,6 +131,13 @@ export default function LeadsPage() {
     { title: 'Клиент', dataIndex: 'client_name', key: 'name' },
     { title: 'Телефон', dataIndex: 'phone', key: 'phone' },
     { title: 'Адрес', dataIndex: 'address', key: 'address' },
+    {
+      title: 'Источник',
+      dataIndex: 'source',
+      key: 'source',
+      render: (value: string) => LEAD_SOURCE_LABELS[value] ?? value,
+    },
+    { title: 'Услуга', dataIndex: 'category', key: 'category' },
     {
       title: 'Задача',
       key: 'job',
@@ -151,9 +210,56 @@ export default function LeadsPage() {
         </Col>
       </Row>
       {error ? <Typography.Paragraph type="warning">{error}</Typography.Paragraph> : null}
-      <Card style={{ marginTop: 16 }} title="Заявки">
+      <Card
+        style={{ marginTop: 16 }}
+        title="Заявки"
+        extra={(
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIntakeOpen(true)}>
+            Принять заявку
+          </Button>
+        )}
+      >
         <Table rowKey="id" columns={columns as any} dataSource={rows} pagination={{ pageSize: 10 }} />
       </Card>
+      <Modal
+        title="Новая заявка"
+        open={intakeOpen}
+        onCancel={() => setIntakeOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ source: 'other' }}
+          onFinish={createLead}
+        >
+          <Form.Item name="source" label="Источник" rules={[{ required: true }]}>
+            <Select options={[...LEAD_SOURCES]} />
+          </Form.Item>
+          <Form.Item name="category" label="Услуга" rules={[{ required: true }]}>
+            <Select options={INCOME_CATEGORIES.map((value) => ({ value, label: value }))} />
+          </Form.Item>
+          <Form.Item name="clientName" label="Имя клиента" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="phone" label="Телефон" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="amount" label="Сумма (необязательно)">
+            <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="comment" label="Комментарий">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={saving} block>
+            Сохранить заявку
+          </Button>
+        </Form>
+      </Modal>
     </div>
   )
 }

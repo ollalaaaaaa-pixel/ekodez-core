@@ -49,6 +49,7 @@ from app.inventory import (
     serialize_inventory,
     serialize_inventory_treatment,
 )
+from app.lead_dictionaries import LEAD_SOURCES
 from app.lead_parser import parse_order_text
 from app.models import (
     ChemicalUsage,
@@ -304,6 +305,7 @@ class LeadOut(BaseModel):
 
     id: int
     source: str
+    category: str | None
     external_id: str | None
     order_at: datetime | None
     client_name: str | None
@@ -320,6 +322,8 @@ class LeadOut(BaseModel):
 
 class RawTextIn(BaseModel):
     text: str
+    source: str = "telegram"
+    category: str | None = None
 
 
 class LeadStatusIn(BaseModel):
@@ -1411,6 +1415,10 @@ def get_lead(
 
 @app.post("/api/leads/ingest", response_model=LeadOut)
 def ingest_lead(payload: RawTextIn):
+    if payload.source not in LEAD_SOURCES:
+        raise HTTPException(status_code=422, detail="bad lead source")
+    if payload.category is not None and payload.category not in INCOME_CATEGORIES_V1:
+        raise HTTPException(status_code=422, detail="bad category")
     data = parse_order_text(payload.text)
     with Session(engine) as session:
         if data["external_id"]:
@@ -1421,7 +1429,8 @@ def ingest_lead(payload: RawTextIn):
                 return _masked_lead(existing)
         protected = protect_lead_pii(data, payload.text)
         row = Lead(
-            source="telegram",
+            source=payload.source,
+            category=payload.category,
             external_id=data["external_id"] or None,
             order_at=data["order_at"],
             client_name=protected["client_name"],

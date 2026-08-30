@@ -125,6 +125,7 @@ class Lead(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(50), default="telegram")
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     order_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     client_name: Mapped[str | None] = mapped_column(String(200), nullable=True)

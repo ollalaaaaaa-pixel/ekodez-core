@@ -62,7 +62,7 @@ class DayApiTest(unittest.TestCase):
         }
         self.assertEqual(category_totals[("income", "Химчистка")], 9000)
         self.assertEqual(category_totals[("expense", "Еда")], 500)
-        self.assertEqual(len(result["categories"]), 11)
+        self.assertEqual(len(result["categories"]), 12)
         self.assertEqual(result["entries"][0]["id"], income.id)
         self.assertEqual(result["entries"][0]["entered_by"], "Алексей")
         self.assertEqual(result["entries"][0]["source"], "manual")
@@ -148,6 +148,31 @@ class DayApiTest(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_mold_income_is_saved_and_visible_in_day(self):
+        target = date(2026, 8, 28)
+        created = main.create_day_entry(
+            main.DayEntryIn(
+                kind="income",
+                category="Плесень",
+                amount=Decimal("2500.00"),
+                comment="ТЕСТ удаление плесени",
+                date=target,
+            )
+        )
+
+        result = main.get_day(target)
+
+        self.assertEqual(created.category, "Плесень")
+        self.assertEqual(result["income_total"], Decimal("2500.00"))
+        self.assertTrue(
+            any(
+                row["kind"] == "income"
+                and row["category"] == "Плесень"
+                and row["total"] == Decimal("2500.00")
+                for row in result["categories"]
+            )
+        )
 
     def test_dynamic_expense_category_is_accepted_and_aggregated(self):
         target = date(2026, 8, 15)

@@ -6,13 +6,9 @@ import {
 import { ArrowRightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import './DayPage.css'
+import { INCOME_CATEGORIES } from './dictionaries'
 
 const API = 'http://127.0.0.1:8000'
-const INCOME_CATEGORIES = [
-  'Химчистка', 'Дезинсекция', 'Дератизация', 'Дезинфекция',
-  'Обработка от клещей', 'Клининг', 'Юридические клиенты',
-  'Доход от агрегаторов', 'Другие работы',
-] as const
 const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафан', 'Прочее'] as const
 
 type Kind = 'income' | 'expense'

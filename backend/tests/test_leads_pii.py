@@ -59,6 +59,36 @@ class LeadPiiApiTest(unittest.TestCase):
             self.assertEqual(result.phone, "8921***5000")
             self.assertEqual(main.health()["pii"], "degraded")
 
+    def test_manual_ingest_accepts_aggregators_and_mold_category(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = main.ingest_lead(
+                main.RawTextIn(
+                    text=LEAD_TEXT.replace("700001", "700002"),
+                    source="aggregators",
+                    category="Плесень",
+                )
+            )
+
+        self.assertEqual(result.source, "aggregators")
+        self.assertEqual(result.category, "Плесень")
+        self.assertEqual(result.phone, "8921***5000")
+        with Session(self.engine) as session:
+            row = session.scalar(select(Lead).where(Lead.external_id == "700002"))
+            assert row is not None
+            self.assertEqual(row.source, "aggregators")
+            self.assertEqual(row.category, "Плесень")
+
+    def test_manual_ingest_rejects_unknown_source_or_category(self):
+        client = TestClient(main.app)
+        for payload in (
+            {"text": LEAD_TEXT, "source": "unknown", "category": "Плесень"},
+            {"text": LEAD_TEXT, "source": "aggregators", "category": "Чужая"},
+        ):
+            with self.subTest(payload=payload):
+                response = client.post("/api/leads/ingest", json=payload)
+                self.assertEqual(response.status_code, 422)
+        client.close()
+
     def test_localhost_can_reveal_encrypted_pii_and_audit_has_no_pii(self):
         key = Fernet.generate_key().decode("ascii")
         output = io.StringIO()
