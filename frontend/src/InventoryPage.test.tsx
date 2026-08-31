@@ -55,7 +55,12 @@ const jsonResponse = (body: unknown, status = 200) =>
   )
 
 describe('Inventory screen', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })))
+  })
 
   test('shows stock, low-stock alert and treatment history', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
@@ -114,5 +119,26 @@ describe('Inventory screen', () => {
       batch_number: 'B-001',
     })
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-  })
+  }, 15_000)
+
+  test('renders stock and treatments as cards at 390px without tables', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('767px'), media: query,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })))
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/inventory')) return jsonResponse([inventoryRow])
+      if (url.endsWith('/api/treatments')) return jsonResponse([treatmentRow])
+      if (url.endsWith('/api/objects')) return jsonResponse([objectRow])
+      return jsonResponse([])
+    })
+    render(<div style={{ width: 390 }}><InventoryPage /></div>)
+
+    expect(await screen.findAllByTestId('inventory-mobile-card')).toHaveLength(1)
+    expect(screen.getAllByTestId('treatment-mobile-card')).toHaveLength(1)
+    expect(screen.queryByTestId('inventory-desktop-table')).toBeNull()
+    expect(screen.getByText('9.000 мл')).toBeTruthy()
+    expect(screen.getByText('1.250 мл')).toBeTruthy()
+  }, 15_000)
 })

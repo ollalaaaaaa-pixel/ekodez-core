@@ -58,4 +58,25 @@ describe('Finance object linking', () => {
       })
     })
   }, 15_000)
+
+  test('labels a linked income as change object and uses the same modal', async () => {
+    const transaction = {
+      id: 8, source: 'manual', operation_date: '2026-08-20', amount: '7000.00',
+      currency: 'RUB', counterparty: null, description: 'ТЕСТ',
+      category: 'Плесень', kind: 'income', review_required: false,
+      object_id: 1, object_name: 'СК Ворон',
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([{ id: 1, name: 'СК Ворон' }])
+      if (url.endsWith('/api/finance/summary')) return jsonResponse({ income: '7000.00', expense: '0.00', review_count: 0 })
+      if (url.includes('/api/analytics/channels')) return jsonResponse({ period_total: '7000.00', channels: [] })
+      return jsonResponse([transaction])
+    })
+    const user = userEvent.setup()
+    render(<FinancePage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Изменить объект' }))
+    expect(screen.getAllByText('Изменить объект').length).toBeGreaterThan(1)
+  }, 15_000)
 })

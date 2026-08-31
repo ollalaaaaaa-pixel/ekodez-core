@@ -29,6 +29,7 @@ class Base(DeclarativeBase):
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (Index("uq_transactions_lead_id", "lead_id", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(50))
@@ -53,6 +54,7 @@ class Transaction(Base):
     object_id: Mapped[int | None] = mapped_column(
         ForeignKey("objects.id"), nullable=True, index=True
     )
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -122,6 +124,12 @@ class Object(Base):
 
 class Lead(Base):
     __tablename__ = "leads"
+    __table_args__ = (
+        CheckConstraint(
+            "performed_by IN ('Артём', 'Алексей')",
+            name="ck_leads_performed_by",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(50), default="telegram")
@@ -138,6 +146,13 @@ class Lead(Base):
     contract: Mapped[str | None] = mapped_column(String(50), nullable=True)
     partner: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="new")
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00"), server_default="0.00"
+    )
+    execution_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    performed_by: Mapped[str] = mapped_column(
+        String(50), default="Артём", server_default="Артём"
+    )
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     encrypted_pii: Mapped[str | None] = mapped_column(Text, nullable=True)
     object_id: Mapped[int | None] = mapped_column(
@@ -147,6 +162,31 @@ class Lead(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),  # noqa: UP017
+    )
+
+
+class TelegramMasterDraft(Base):
+    __tablename__ = "telegram_master_drafts"
+    __table_args__ = (
+        CheckConstraint(
+            "actor_key IN ('owner', 'alexey')",
+            name="ck_telegram_master_drafts_actor",
+        ),
+        CheckConstraint(
+            "action IN ('complete', 'reschedule')",
+            name="ck_telegram_master_drafts_action",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_key: Mapped[str] = mapped_column(String(20), unique=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(20))
+    step: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),  # noqa: UP017
     )

@@ -20,6 +20,10 @@ const maskedLead = {
   contract: null,
   partner: null,
   status: 'new',
+  amount: '0.00',
+  execution_date: '2026-08-31',
+  object_id: null,
+  performed_by: 'Артём',
 }
 
 const jsonResponse = (body: unknown) =>
@@ -31,7 +35,15 @@ const jsonResponse = (body: unknown) =>
   )
 
 describe('Lead PII reveal', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })))
+  })
   afterEach(() => {
     cleanup()
     Modal.destroyAll()
@@ -106,4 +118,67 @@ describe('Lead PII reveal', () => {
     expect(await screen.findByText('Плесень')).toBeTruthy()
     expect(screen.getByText('8921***5000')).toBeTruthy()
   }, 15_000)
+
+  test('edits operational fields through PATCH and labels object exactly', async () => {
+    const object = { id: 7, name: 'ТЕСТ объект' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([object])
+      if (url.endsWith('/api/leads') && !init?.method) return jsonResponse([maskedLead])
+      if (url.endsWith('/api/leads/1') && init?.method === 'PATCH') {
+        return jsonResponse({ ...maskedLead, ...JSON.parse(String(init.body)) })
+      }
+      return jsonResponse([])
+    })
+    const user = userEvent.setup()
+    render(<LeadsPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Редактировать' }))
+    expect(screen.getByLabelText('Объект')).toBeTruthy()
+    await user.clear(screen.getByLabelText('Сумма'))
+    await user.type(screen.getByLabelText('Сумма'), '2500')
+    await user.clear(screen.getByLabelText('Дата обработки'))
+    await user.type(screen.getByLabelText('Дата обработки'), '2026-09-01')
+    await user.click(screen.getByRole('button', { name: 'Сохранить изменения' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8000/api/leads/1',
+      expect.objectContaining({ method: 'PATCH' }),
+    ))
+    const call = fetchMock.mock.calls.find(([url, init]) =>
+      String(url).endsWith('/api/leads/1') && init?.method === 'PATCH')
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      amount: '2500.00',
+      execution_date: '2026-09-01',
+      category: null,
+      object_id: null,
+      performed_by: 'Артём',
+    })
+  }, 15_000)
+
+  test('today filter and mobile cards include only due active leads', async () => {
+    vi.setSystemTime(new Date('2026-08-31T10:00:00+03:00'))
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('767px'), media: query,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })))
+    const variants = [
+      { ...maskedLead, id: 1, execution_date: '2026-08-30', status: 'new' },
+      { ...maskedLead, id: 2, execution_date: '2026-08-31', status: 'in_work' },
+      { ...maskedLead, id: 3, execution_date: '2026-09-01', status: 'new' },
+      { ...maskedLead, id: 4, execution_date: '2026-08-31', status: 'done' },
+      { ...maskedLead, id: 5, execution_date: null, status: 'new' },
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+      String(input).endsWith('/api/objects') ? jsonResponse([]) : jsonResponse(variants))
+    const user = userEvent.setup()
+    render(<LeadsPage />)
+    await user.click(await screen.findByText('Сегодня'))
+
+    expect(await screen.findAllByTestId('lead-mobile-card')).toHaveLength(2)
+    expect(screen.queryByTestId('lead-desktop-table')).toBeNull()
+    expect(screen.getAllByText('8921***5000')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Редактировать' })).toHaveLength(2)
+    vi.useRealTimers()
+  })
 })

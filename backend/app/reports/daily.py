@@ -12,8 +12,10 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
 from app.inventory import LOW_STOCK_RATIO
+from app.master_workflow import list_due_leads
 from app.models import Inventory, Lead, Object, SentReport, Transaction
-from app.tg_poller import send_message
+from app.security.pii import decrypt_pii
+from app.tg_poller import _send_message, send_due_lead_cards, send_message
 
 MONEY_QUANTUM = Decimal("0.01")
 DETAIL_LIMIT = 10
@@ -21,6 +23,7 @@ DETAIL_LABEL_LIMIT = 120
 MANUAL_COOLDOWN_SECONDS = 60
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 RecipientSender = Callable[[str, int, str], bool]
+CardSender = Callable[..., bool]
 ReportType = Literal["auto", "manual"]
 _delivery_lock = threading.Lock()
 
@@ -233,6 +236,36 @@ def format_daily_report(snapshot: ReportSnapshot) -> str:
     return "\n".join(lines)
 
 
+def format_due_leads_section(
+    session: Session, today: date, *, reveal_pii: bool
+) -> list[str]:
+    lines = ["", "Работы на сегодня"]
+    leads = list_due_leads(session, today)
+    if not leads:
+        lines.append("Нет работ")
+        return lines
+    for lead in leads:
+        client_name = lead.client_name or "не указано"
+        phone = lead.phone or "не указано"
+        address = lead.address or "не указано"
+        if reveal_pii:
+            try:
+                full = decrypt_pii(lead.encrypted_pii)
+            except ValueError:
+                full = {}
+            client_name = str(full.get("client_name") or client_name)
+            phone = str(full.get("phone") or phone)
+            address = str(full.get("address") or address)
+        due = lead.execution_date.strftime("%d.%m.%Y") if lead.execution_date else "—"
+        lines.extend(
+            [
+                f"• Заявка #{lead.id} — {due}",
+                f"  {client_name}; {phone}; {address}",
+            ]
+        )
+    return lines
+
+
 def reports_configured() -> bool:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     owner_id = os.getenv("OWNER_TG_ID", "").strip()
@@ -290,6 +323,7 @@ def _send_daily_report_locked(
     report_type: ReportType,
     now: datetime,
     sender: RecipientSender = send_message,
+    card_sender: CardSender = _send_message,
 ) -> SentReport:
     if report_type not in ("auto", "manual"):
         raise ValueError("unsupported report type")
@@ -328,9 +362,19 @@ def _send_daily_report_locked(
                     raise ManualReportCooldown(max(1, remaining))
 
         snapshot = build_daily_snapshot(session, send_date - timedelta(days=1))
-        message = format_daily_report(snapshot)
+        message = "\n".join(
+            [
+                format_daily_report(snapshot),
+                *format_due_leads_section(session, send_date, reveal_pii=True),
+            ]
+        )
         try:
             delivered = sender(token, chat_id, message)
+            if delivered and report_type == "auto":
+                due_leads = list_due_leads(session, send_date)
+                delivered = send_due_lead_cards(
+                    token, chat_id, due_leads, sender=card_sender
+                )
         except Exception:
             delivered = False
         row = SentReport(
@@ -354,8 +398,9 @@ def send_daily_report(
     report_type: ReportType,
     now: datetime,
     sender: RecipientSender = send_message,
+    card_sender: CardSender = _send_message,
 ) -> SentReport:
     # В утверждённом локальном deployment один backend-процесс. Блокировка
     # сериализует HTTP-запросы и scheduler для auto-idempotency и cooldown.
     with _delivery_lock:
-        return _send_daily_report_locked(engine, report_type, now, sender)
+        return _send_daily_report_locked(engine, report_type, now, sender, card_sender)

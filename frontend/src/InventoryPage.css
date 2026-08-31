@@ -1,0 +1,20 @@
+.inventory-mobile-list,
+.inventory-mobile-details {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.inventory-mobile-details span,
+.inventory-mobile-details strong {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .inventory-mobile-list .ant-card,
+  .inventory-mobile-list .ant-card-body,
+  .ant-space-item {
+    min-width: 0;
+    max-width: 100%;
+  }
+}

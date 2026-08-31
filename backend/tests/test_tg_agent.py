@@ -1,16 +1,30 @@
+import io
 import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
+from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app import tg_poller
-from app.models import Base, Transaction
+from app.finance_categories import INCOME_CATEGORIES_V1
+from app.models import (
+    Base,
+    ChemicalUsage,
+    Inventory,
+    Lead,
+    Object,
+    TelegramMasterDraft,
+    Transaction,
+    Treatment,
+)
+from app.security.pii import protect_lead_pii
 
 
 class FakeResponse:
@@ -38,8 +52,15 @@ class TelegramAgentTest(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
+        self.pii_env = patch.dict(
+            os.environ,
+            {"PII_FERNET_KEY": Fernet.generate_key().decode("ascii")},
+            clear=False,
+        )
+        self.pii_env.start()
 
     def tearDown(self):
+        self.pii_env.stop()
         self.engine.dispose()
 
     def test_parses_direction_decimal_amount_and_category(self):
@@ -341,6 +362,222 @@ class TelegramAgentTest(unittest.TestCase):
             self.assertIsNone(session.get(Transaction, tx_id))
         answer.assert_called_once_with("token", "callback-1")
         edit.assert_called_once_with("token", 101, 55, "❌ Отклонено")
+
+    def _seed_master_lead(self) -> tuple[int, int]:
+        source = {
+            "client_name": "ТЕСТ Клиент",
+            "phone": "89214725000",
+            "address": "Архангельск, ТЕСТ улица, 1",
+            "comment": "ТЕСТ",
+        }
+        protected = protect_lead_pii(source, "ТЕСТ")
+        with Session(self.engine) as session:
+            service_object = Object(
+                name="ТЕСТ объект",
+                address="Архангельск, объект",
+                type="office",
+                area_sqm=Decimal("10.00"),
+                risk_points=[],
+                status="active",
+            )
+            session.add(service_object)
+            session.flush()
+            lead = Lead(
+                source="telegram",
+                client_name=protected["client_name"],
+                phone=protected["phone"],
+                address=protected["address"],
+                comment=protected["comment"],
+                raw_text=protected["raw_text"],
+                encrypted_pii=protected["encrypted_pii"],
+                execution_date=date.today(),
+                object_id=service_object.id,
+                amount=Decimal("2500.00"),
+                status="new",
+            )
+            inventory = Inventory(
+                chemical_name="ТЕСТ препарат",
+                quantity=Decimal("10.000"),
+                initial_quantity=Decimal("10.000"),
+                unit="л",
+                batch_number="ТЕСТ-1",
+                expiry_date=date(2030, 1, 1),
+                supplier="ТЕСТ",
+            )
+            session.add_all([lead, inventory])
+            session.commit()
+            return lead.id, inventory.id
+
+    def test_today_reveals_pii_only_to_allowlisted_sender(self):
+        lead_id, _ = self._seed_master_lead()
+        allowed = {
+            "update_id": 700,
+            "message": {
+                "from": {"id": 101},
+                "chat": {"id": 101, "type": "private"},
+                "text": "/today",
+            },
+        }
+        unknown = {
+            "update_id": 701,
+            "message": {
+                "from": {"id": 999},
+                "chat": {"id": 999, "type": "private"},
+                "text": "/today",
+            },
+        }
+        captured_stdout = io.StringIO()
+        captured_stderr = io.StringIO()
+        with (
+            patch.object(tg_poller, "_send_message") as send_message,
+            redirect_stdout(captured_stdout),
+            redirect_stderr(captured_stderr),
+        ):
+            tg_poller._process_update(
+                "token-marker", self.engine, allowed, {101: "owner"}
+            )
+            tg_poller._process_update(
+                "token-marker", self.engine, unknown, {101: "owner"}
+            )
+
+        rendered = "\n".join(str(call) for call in send_message.call_args_list)
+        self.assertIn("89214725000", rendered)
+        self.assertIn("Архангельск, ТЕСТ улица, 1", rendered)
+        self.assertIn(f"mw:done:{lead_id}", rendered)
+        self.assertNotIn("999", rendered)
+        process_output = captured_stdout.getvalue() + captured_stderr.getvalue()
+        for secret_value in (
+            "89214725000",
+            "Архангельск, ТЕСТ улица, 1",
+            "token-marker",
+            "101",
+            "999",
+        ):
+            self.assertNotIn(secret_value, process_output)
+
+    def test_material_keyboard_hides_without_materials_after_first_choice(self):
+        _, _ = self._seed_master_lead()
+        with Session(self.engine) as session:
+            initial = tg_poller._inventory_keyboard(
+                session, allow_without_materials=True
+            )
+            subsequent = tg_poller._inventory_keyboard(
+                session, allow_without_materials=False
+            )
+
+        self.assertIn("mw:none", json.dumps(initial, ensure_ascii=False))
+        self.assertNotIn("mw:none", json.dumps(subsequent, ensure_ascii=False))
+
+    def test_master_cancel_clears_draft(self):
+        lead_id, _ = self._seed_master_lead()
+        with Session(self.engine) as session:
+            tg_poller._replace_draft(
+                session,
+                actor_key="owner",
+                lead_id=lead_id,
+                action="complete",
+                step="confirm",
+                payload={"category": "Плесень", "performed_by": "Артём"},
+            )
+
+        update = {
+            "update_id": 790,
+            "callback_query": {
+                "id": "mw-cancel",
+                "from": {"id": 101},
+                "data": "mw:cancel",
+                "message": {"message_id": 70, "chat": {"id": 101}},
+            },
+        }
+        with (
+            patch.object(tg_poller, "_send_message") as send_message,
+            patch.object(tg_poller, "_answer_callback_query"),
+        ):
+            tg_poller._process_update(
+                "token-marker", self.engine, update, {101: "owner"}
+            )
+
+        with Session(self.engine) as session:
+            self.assertIsNone(session.scalar(select(TelegramMasterDraft).limit(1)))
+        self.assertIn("Отменено", str(send_message.call_args_list))
+
+    def test_master_mock_telegram_e2e_is_atomic_and_idempotent(self):
+        lead_id, inventory_id = self._seed_master_lead()
+        category_index = INCOME_CATEGORIES_V1.index("Плесень")
+
+        def callback(data: str, number: int) -> dict:
+            return {
+                "update_id": 800 + number,
+                "callback_query": {
+                    "id": f"mw-{number}",
+                    "from": {"id": 101},
+                    "data": data,
+                    "message": {"message_id": 70 + number, "chat": {"id": 101}},
+                },
+            }
+
+        sequence = [
+            {
+                "update_id": 799,
+                "message": {
+                    "from": {"id": 101},
+                    "chat": {"id": 101, "type": "private"},
+                    "text": "/today",
+                },
+            },
+            callback(f"mw:done:{lead_id}", 1),
+            callback(f"mw:cat:{category_index}", 2),
+            callback("mw:who:alexey", 3),
+            callback(f"mw:inv:{inventory_id}", 4),
+            {
+                "update_id": 805,
+                "message": {
+                    "from": {"id": 101},
+                    "chat": {"id": 101, "type": "private"},
+                    "text": "1,250",
+                },
+            },
+            callback("mw:finish", 6),
+            callback("mw:confirm", 7),
+        ]
+        with (
+            patch.object(tg_poller, "_send_message"),
+            patch.object(tg_poller, "_edit_message"),
+            patch.object(tg_poller, "_answer_callback_query"),
+        ):
+            for update in sequence:
+                tg_poller._process_update(
+                    "token-marker", self.engine, update, {101: "owner"}
+                )
+            for update in sequence[1:]:
+                tg_poller._process_update(
+                    "token-marker", self.engine, update, {101: "owner"}
+                )
+
+        with Session(self.engine) as session:
+            lead = session.get(Lead, lead_id)
+            inventory = session.get(Inventory, inventory_id)
+            treatments = session.scalars(
+                select(Treatment).where(Treatment.lead_id == lead_id)
+            ).all()
+            transactions = session.scalars(
+                select(Transaction).where(Transaction.lead_id == lead_id)
+            ).all()
+            usages = session.scalars(
+                select(ChemicalUsage).where(
+                    ChemicalUsage.treatment_id == treatments[0].id
+                )
+            ).all()
+            assert lead is not None and inventory is not None
+            self.assertEqual(lead.status, "done")
+            self.assertEqual(lead.category, "Плесень")
+            self.assertEqual(lead.performed_by, "Алексей")
+            self.assertEqual(inventory.quantity, Decimal("8.750"))
+            self.assertEqual(len(treatments), 1)
+            self.assertEqual(len(usages), 1)
+            self.assertEqual(usages[0].quantity, Decimal("1.250"))
+            self.assertEqual(len(transactions), 1)
+            self.assertEqual(transactions[0].lead_id, lead_id)
 
 
 if __name__ == "__main__":

@@ -253,7 +253,7 @@ export default function FinancePage() {
               setLinking(r)
               setSelectedObjectId(r.object_id)
             }}>
-              Привязать объект
+              {r.object_id === null ? 'Привязать объект' : 'Изменить объект'}
             </Button>
           ) : null}
         </Space>
@@ -362,7 +362,7 @@ export default function FinancePage() {
         onImported={handleImported}
       />
       <Modal
-        title="Привязать объект"
+        title={linking?.object_id === null ? 'Привязать объект' : 'Изменить объект'}
         open={linking !== null}
         confirmLoading={linkSaving}
         okText="Сохранить привязку"

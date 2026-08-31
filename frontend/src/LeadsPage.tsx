@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
   Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
-  Statistic, Table, Tag, Typography, message,
+  Segmented, Statistic, Table, Tag, Typography, message,
 } from 'antd'
 import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
 import { INCOME_CATEGORIES, LEAD_SOURCES, LEAD_SOURCE_LABELS } from './dictionaries'
+import './LeadsPage.css'
 
 const API = 'http://127.0.0.1:8000'
 
@@ -24,6 +25,24 @@ type Lead = {
   contract: string | null
   partner: string | null
   status: string
+  amount: string
+  execution_date: string | null
+  object_id: number | null
+  performed_by: string
+}
+
+type ServiceObject = { id: number; name: string }
+
+const useIsMobile = () => {
+  const query = '(max-width: 767px)'
+  const [mobile, setMobile] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const update = () => setMobile(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  return mobile
 }
 
 const statusLabel: Record<string, { text: string; color: string }> = {
@@ -38,7 +57,12 @@ export default function LeadsPage() {
   const [error, setError] = useState('')
   const [intakeOpen, setIntakeOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [objects, setObjects] = useState<ServiceObject[]>([])
+  const [editing, setEditing] = useState<Lead | null>(null)
+  const [filter, setFilter] = useState<'all' | 'today'>('all')
   const [form] = Form.useForm()
+  const [editForm] = Form.useForm()
+  const isMobile = useIsMobile()
 
   const load = () => {
     fetch(API + '/api/leads')
@@ -52,6 +76,10 @@ export default function LeadsPage() {
   }, [])
 
   const setStatus = (id: number, status: string) => {
+    const lead = rows.find((row) => row.id === id)
+    if (status === 'done' && lead?.amount === '0.00') {
+      message.info('Укажите сумму в заявке — автодоход не будет создан')
+    }
     fetch(API + '/api/leads/' + id + '/status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,6 +95,7 @@ export default function LeadsPage() {
     address: string
     amount?: number
     comment?: string
+    executionDate?: string
   }) => {
     const lines = [
       `Имя клиента: ${values.clientName}`,
@@ -88,6 +117,8 @@ export default function LeadsPage() {
           text: lines.join('\n'),
           source: values.source,
           category: values.category,
+          amount: values.amount === undefined ? undefined : values.amount.toFixed(2),
+          execution_date: values.executionDate || null,
         }),
       })
       if (!response.ok) throw new Error('lead ingest failed')
@@ -98,6 +129,56 @@ export default function LeadsPage() {
       message.success('Заявка сохранена')
     } catch {
       message.error('Не удалось сохранить заявку')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openEdit = (lead: Lead) => {
+    setEditing(lead)
+    if (objects.length === 0) {
+      fetch(API + '/api/objects')
+        .then((response) => response.json())
+        .then((data) => setObjects(Array.isArray(data) ? data : []))
+        .catch(() => undefined)
+    }
+    editForm.setFieldsValue({
+      amount: lead.amount,
+      execution_date: lead.execution_date,
+      category: lead.category,
+      object_id: lead.object_id,
+      performed_by: lead.performed_by,
+    })
+  }
+
+  const saveEdit = async (values: {
+    amount: string | number
+    execution_date: string | null
+    category: string | null
+    object_id: number | null
+    performed_by: string
+  }) => {
+    if (!editing) return
+    setSaving(true)
+    try {
+      const response = await fetch(`${API}/api/leads/${editing.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: Number(values.amount).toFixed(2),
+          execution_date: values.execution_date || null,
+          category: values.category ?? null,
+          object_id: values.object_id ?? null,
+          performed_by: values.performed_by,
+        }),
+      })
+      if (!response.ok) throw new Error('lead patch failed')
+      const updated = (await response.json()) as Lead
+      setRows((current) => current.map((row) => row.id === updated.id ? updated : row))
+      setEditing(null)
+      message.success('Заявка обновлена')
+    } catch {
+      message.error('Не удалось обновить заявку')
     } finally {
       setSaving(false)
     }
@@ -161,6 +242,7 @@ export default function LeadsPage() {
           <Button size="small" onClick={() => revealPii(r)}>
             Показать полностью
           </Button>
+          <Button size="small" onClick={() => openEdit(r)}>Редактировать</Button>
           {r.status === 'new' ? (
             <>
               <Button size="small" type="primary" onClick={() => setStatus(r.id, 'in_work')}>
@@ -187,6 +269,19 @@ export default function LeadsPage() {
   ]
 
   const newCount = rows.filter((r) => r.status === 'new').length
+  const today = new Date().toLocaleDateString('en-CA')
+  const visibleRows = filter === 'all' ? rows : rows.filter((row) =>
+    row.execution_date !== null && row.execution_date <= today
+    && (row.status === 'new' || row.status === 'in_work'))
+
+  const mobileActions = (lead: Lead) => (
+    <div className="lead-mobile-actions">
+      <Button onClick={() => revealPii(lead)}>Показать полностью</Button>
+      <Button onClick={() => openEdit(lead)}>Редактировать</Button>
+      {lead.status === 'new' ? <Button type="primary" onClick={() => setStatus(lead.id, 'in_work')}>В работу</Button> : null}
+      {lead.status === 'in_work' ? <Button type="primary" onClick={() => setStatus(lead.id, 'done')}>Выполнена</Button> : null}
+    </div>
+  )
 
   return (
     <div>
@@ -219,7 +314,36 @@ export default function LeadsPage() {
           </Button>
         )}
       >
-        <Table rowKey="id" columns={columns as any} dataSource={rows} pagination={{ pageSize: 10 }} />
+        <Segmented
+          value={filter}
+          onChange={setFilter}
+          options={[{ label: 'Все', value: 'all' }, { label: 'Сегодня', value: 'today' }]}
+          style={{ marginBottom: 16 }}
+        />
+        {isMobile ? (
+          <div className="lead-mobile-list">
+            {visibleRows.map((lead) => {
+              const status = statusLabel[lead.status] ?? statusLabel.new
+              return (
+                <Card key={lead.id} data-testid="lead-mobile-card" size="small" title={`Заявка #${lead.id}`} extra={<Tag color={status.color}>{status.text}</Tag>}>
+                  <div className="lead-mobile-details">
+                    <strong>{lead.client_name || 'Клиент'}</strong>
+                    <span>{lead.phone || 'Телефон не указан'}</span>
+                    <span>{lead.address || 'Адрес не указан'}</span>
+                    <span>Дата: {lead.execution_date || 'не назначена'}</span>
+                    <span>Услуга: {lead.category || 'не указана'}</span>
+                    <span>Сумма: {lead.amount} ₽</span>
+                  </div>
+                  {mobileActions(lead)}
+                </Card>
+              )
+            })}
+          </div>
+        ) : (
+          <div data-testid="lead-desktop-table">
+            <Table rowKey="id" columns={columns as any} dataSource={visibleRows} pagination={{ pageSize: 10 }} />
+          </div>
+        )}
       </Card>
       <Modal
         title="Новая заявка"
@@ -252,11 +376,42 @@ export default function LeadsPage() {
           <Form.Item name="amount" label="Сумма (необязательно)">
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
           </Form.Item>
+          <Form.Item name="executionDate" label="Дата обработки">
+            <Input type="date" />
+          </Form.Item>
           <Form.Item name="comment" label="Комментарий">
             <Input.TextArea rows={3} />
           </Form.Item>
           <Button type="primary" htmlType="submit" loading={saving} block>
             Сохранить заявку
+          </Button>
+        </Form>
+      </Modal>
+      <Modal
+        title="Редактировать заявку"
+        open={editing !== null}
+        onCancel={() => setEditing(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical" onFinish={saveEdit}>
+          <Form.Item name="amount" label="Сумма" rules={[{ required: true }]}>
+            <InputNumber stringMode min="0" precision={2} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="execution_date" label="Дата обработки">
+            <Input type="date" />
+          </Form.Item>
+          <Form.Item name="category" label="Услуга">
+            <Select allowClear options={INCOME_CATEGORIES.map((value) => ({ value, label: value }))} />
+          </Form.Item>
+          <Form.Item name="object_id" label="Объект">
+            <Select allowClear options={objects.map((row) => ({ value: row.id, label: row.name }))} />
+          </Form.Item>
+          <Form.Item name="performed_by" label="Исполнитель" rules={[{ required: true }]}>
+            <Select options={['Артём', 'Алексей'].map((value) => ({ value, label: value }))} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={saving} block>
+            Сохранить изменения
           </Button>
         </Form>
       </Modal>

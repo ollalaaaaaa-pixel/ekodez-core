@@ -1,0 +1,31 @@
+.lead-mobile-list,
+.lead-mobile-details {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lead-mobile-details span,
+.lead-mobile-details strong {
+  overflow-wrap: anywhere;
+}
+
+.lead-mobile-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+  margin-top: 16px;
+}
+
+.lead-mobile-actions .ant-btn {
+  min-height: 44px;
+  white-space: normal;
+}
+
+@media (max-width: 767px) {
+  .lead-mobile-list .ant-card,
+  .lead-mobile-list .ant-card-body {
+    min-width: 0;
+    width: 100%;
+  }
+}

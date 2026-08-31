@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -50,7 +50,8 @@ from app.inventory import (
     serialize_inventory_treatment,
 )
 from app.lead_dictionaries import LEAD_SOURCES
-from app.lead_parser import parse_order_text
+from app.lead_parser import parse_amount_note, parse_order_text
+from app.master_workflow import PERFORMERS
 from app.models import (
     ChemicalUsage,
     Contract,
@@ -143,6 +144,7 @@ class TransactionOut(BaseModel):
     kind: str
     review_required: bool
     object_id: int | None
+    lead_id: int | None
     object_name: str | None
 
 
@@ -269,7 +271,7 @@ class BankConfirmRowIn(BaseModel):
     operation_type: str
     operation_date: date
     doc_number: str
-    amount: str
+    amount: Decimal
     description: str
     payment_purpose: str
     counterparty_name: str
@@ -318,12 +320,30 @@ class LeadOut(BaseModel):
     contract: str | None
     partner: str | None
     status: str
+    amount: Decimal
+    execution_date: date | None
+    object_id: int | None
+    performed_by: str
+
+    @field_serializer("amount")
+    def serialize_amount(self, value: Decimal) -> str:
+        return f"{value:.2f}"
 
 
 class RawTextIn(BaseModel):
     text: str
     source: str = "telegram"
     category: str | None = None
+    amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    execution_date: date | None = None
+
+
+class LeadPatchIn(BaseModel):
+    amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    execution_date: date | None = None
+    category: str | None = None
+    object_id: int | None = Field(default=None, gt=0)
+    performed_by: str | None = None
 
 
 class LeadStatusIn(BaseModel):
@@ -719,6 +739,7 @@ def _transaction_out(session: Session, row: Transaction) -> TransactionOut:
         kind=row.kind,
         review_required=row.review_required,
         object_id=row.object_id,
+        lead_id=row.lead_id,
         object_name=object_name,
     )
 
@@ -1443,6 +1464,17 @@ def ingest_lead(payload: RawTextIn):
             contract=data["contract"] or None,
             partner=data["partner"] or None,
             status="new",
+            amount=(
+                payload.amount
+                if payload.amount is not None
+                else parse_amount_note(data["amount_note"])
+            ),
+            execution_date=(
+                payload.execution_date
+                if payload.execution_date is not None
+                else data["order_at"].date() if data["order_at"] else None
+            ),
+            performed_by="Артём",
             raw_text=protected["raw_text"],
             encrypted_pii=protected["encrypted_pii"],
         )
@@ -1450,6 +1482,66 @@ def ingest_lead(payload: RawTextIn):
         session.commit()
         session.refresh(row)
         return _masked_lead(row)
+
+
+@app.patch("/api/leads/{lead_id}", response_model=LeadOut)
+def update_lead(lead_id: int, payload: LeadPatchIn):
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "amount" in changes and changes["amount"] is None:
+        raise HTTPException(status_code=422, detail="amount cannot be null")
+    if "performed_by" in changes and changes["performed_by"] is None:
+        raise HTTPException(status_code=422, detail="performed_by cannot be null")
+    if (
+        changes.get("category") is not None
+        and changes["category"] not in INCOME_CATEGORIES_V1
+    ):
+        raise HTTPException(status_code=422, detail="bad category")
+    if (
+        changes.get("performed_by") is not None
+        and changes["performed_by"] not in PERFORMERS
+    ):
+        raise HTTPException(status_code=422, detail="bad performer")
+
+    with Session(engine) as session:
+        row = session.get(Lead, lead_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        object_id = changes.get("object_id")
+        if object_id is not None and session.get(Object, object_id) is None:
+            raise HTTPException(status_code=404, detail="object not found")
+        for field_name, value in changes.items():
+            setattr(row, field_name, value)
+        session.commit()
+        session.refresh(row)
+        return _masked_lead(row)
+
+
+def _ensure_lead_income(session: Session, lead: Lead) -> None:
+    if lead.amount <= Decimal("0.00"):
+        return
+    if lead.execution_date is None:
+        raise HTTPException(status_code=422, detail="execution date is required")
+    existing = session.scalar(select(Transaction).where(Transaction.lead_id == lead.id))
+    if existing is not None:
+        return
+    session.add(
+        Transaction(
+            source="lead_auto",
+            operation_date=lead.execution_date,
+            amount=lead.amount,
+            currency="RUB",
+            description="Автодоход по выполненной заявке",
+            category=lead.category or "Другие работы",
+            channel=None,
+            entered_by=lead.performed_by,
+            kind="income",
+            review_required=False,
+            object_id=lead.object_id,
+            lead_id=lead.id,
+        )
+    )
 
 
 @app.post("/api/leads/{lead_id}/status", response_model=LeadOut)
@@ -1460,6 +1552,8 @@ def set_lead_status(lead_id: int, payload: LeadStatusIn):
         row = session.get(Lead, lead_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        if payload.status == "done":
+            _ensure_lead_income(session, row)
         if payload.status == "done" and row.status != "done":
             row.closed_at = datetime.now(UTC)
         elif payload.status != "done":

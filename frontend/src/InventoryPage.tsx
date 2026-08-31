@@ -15,6 +15,7 @@ import {
   message,
 } from 'antd'
 import { ExperimentOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
+import './InventoryPage.css'
 
 const API = 'http://127.0.0.1:8000'
 
@@ -77,6 +78,18 @@ const decimalRule = {
   message: 'Введите число, не более 3 знаков после запятой',
 }
 
+const useIsMobile = () => {
+  const query = '(max-width: 767px)'
+  const [mobile, setMobile] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const update = () => setMobile(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  return mobile
+}
+
 export default function InventoryPage() {
   const [inventory, setInventory] = useState<Inventory[]>([])
   const [treatments, setTreatments] = useState<Treatment[]>([])
@@ -87,6 +100,7 @@ export default function InventoryPage() {
   const [treatmentOpen, setTreatmentOpen] = useState(false)
   const [inventoryForm] = Form.useForm<InventoryForm>()
   const [treatmentForm] = Form.useForm<TreatmentForm>()
+  const isMobile = useIsMobile()
 
   const loadInventory = useCallback(async () => {
     const query = new URLSearchParams()
@@ -167,7 +181,7 @@ export default function InventoryPage() {
             placeholder="Поиск по препарату или партии"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            style={{ width: 260 }}
+            style={{ width: 'min(260px, 100%)' }}
           />
           <Checkbox checked={lowOnly} onChange={(event) => setLowOnly(event.target.checked)}>
             Только низкий остаток
@@ -191,7 +205,21 @@ export default function InventoryPage() {
       ) : null}
 
       <Card title="Остатки препаратов">
-        <Table
+        {isMobile ? (
+          <div className="inventory-mobile-list">
+            {inventory.map((row) => (
+              <Card key={row.id} data-testid="inventory-mobile-card" size="small" title={row.chemical_name}>
+                <div className="inventory-mobile-details">
+                  <strong>{row.quantity} {row.unit}</strong>
+                  <span>Партия: {row.batch_number}</span>
+                  <span>Годен до: {row.expiry_date}</span>
+                  <span>Поставщик: {row.supplier}</span>
+                  {row.low_stock ? <Tag color="red">Низкий остаток</Tag> : <Tag color="green">В норме</Tag>}
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : <div data-testid="inventory-desktop-table"><Table
           rowKey="id"
           dataSource={inventory}
           pagination={{ pageSize: 10 }}
@@ -210,11 +238,28 @@ export default function InventoryPage() {
                 row.low_stock ? <Tag color="red">Низкий остаток</Tag> : <Tag color="green">В норме</Tag>,
             },
           ]}
-        />
+        /></div>}
       </Card>
 
       <Card title="История списаний">
-        <Table
+        {isMobile ? (
+          <div className="inventory-mobile-list">
+            {treatments.map((row) => (
+              <Card key={row.id} data-testid="treatment-mobile-card" size="small" title={row.performed_at.slice(0, 16).replace('T', ' ')}>
+                <div className="inventory-mobile-details">
+                  <strong>{objectNames.get(row.object_id) ?? `Объект #${row.object_id}`}</strong>
+                  <span>Мастер: {row.performed_by}</span>
+                  {row.chemicals_used.map((usage) => (
+                    <div key={usage.id}>
+                      <span>{usage.chemical_name}</span> — <span>{usage.quantity_used} {usage.unit}</span>
+                    </div>
+                  ))}
+                  {row.notes ? <span>{row.notes}</span> : null}
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : <div data-testid="treatment-desktop-table"><Table
           rowKey="id"
           dataSource={treatments}
           pagination={{ pageSize: 10 }}
@@ -244,7 +289,7 @@ export default function InventoryPage() {
             },
             { title: 'Комментарий', dataIndex: 'notes' },
           ]}
-        />
+        /></div>}
       </Card>
 
       <Modal

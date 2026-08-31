@@ -13,6 +13,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from alembic.config import Config
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from sqlalchemy.pool import StaticPool
 from alembic import command
 from app import main
 from app.models import Base, Inventory, Lead, Object, SentReport, Transaction
+from app.security.pii import protect_lead_pii
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
@@ -328,6 +330,104 @@ class DailyDeliveryTest(unittest.TestCase):
             row = session.scalar(select(SentReport))
             assert row is not None
             self.assertEqual(row.id, result.id)
+
+    def test_owner_report_contains_due_work_with_full_pii_and_safe_fallback(self):
+        from app.reports.daily import format_due_leads_section, send_daily_report
+
+        key = Fernet.generate_key().decode("ascii")
+        full = {
+            "client_name": "ТЕСТ Клиент",
+            "phone": "89214725000",
+            "address": "Архангельск, ТЕСТ улица, 1",
+            "comment": None,
+        }
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "token-marker",
+            "OWNER_TG_ID": "12345",
+            "PII_FERNET_KEY": key,
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            protected = protect_lead_pii(full, "ТЕСТ")
+            with Session(self.engine) as session:
+                session.add_all(
+                    [
+                        Lead(
+                            source="telegram",
+                            status="new",
+                            execution_date=date(2026, 8, 25),
+                            client_name=protected["client_name"],
+                            phone=protected["phone"],
+                            address=protected["address"],
+                            encrypted_pii=protected["encrypted_pii"],
+                        ),
+                        Lead(
+                            source="telegram",
+                            status="in_work",
+                            execution_date=date(2026, 8, 26),
+                            client_name="Маска",
+                            phone="8921***5001",
+                            address="Архангельск, ***",
+                            encrypted_pii="corrupt",
+                        ),
+                        Lead(
+                            source="telegram",
+                            status="done",
+                            execution_date=date(2026, 8, 26),
+                        ),
+                        Lead(
+                            source="telegram",
+                            status="cancelled",
+                            execution_date=date(2026, 8, 26),
+                        ),
+                        Lead(
+                            source="telegram",
+                            status="new",
+                            execution_date=date(2026, 8, 27),
+                        ),
+                    ]
+                )
+                session.commit()
+                masked = "\n".join(
+                    format_due_leads_section(
+                        session, date(2026, 8, 26), reveal_pii=False
+                    )
+                )
+            calls = []
+            cards = []
+
+            def capture_message(*args):
+                calls.append(args)
+                return True
+
+            def capture_card(*args, **kwargs):
+                cards.append((args, kwargs))
+                return True
+
+            send_daily_report(
+                self.engine,
+                "auto",
+                self.now,
+                sender=capture_message,
+                card_sender=capture_card,
+            )
+
+        self.assertEqual(len(calls), 1)
+        message = calls[0][2]
+        self.assertIn("Работы на сегодня", message)
+        self.assertIn("89214725000", message)
+        self.assertIn("Архангельск, ТЕСТ улица, 1", message)
+        self.assertIn("8921***5001", message)
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(
+            cards[0][1]["reply_markup"]["inline_keyboard"][0][0]["text"],
+            "Выполнено",
+        )
+        self.assertEqual(
+            cards[0][1]["reply_markup"]["inline_keyboard"][0][1]["text"],
+            "Перенести",
+        )
+        self.assertNotIn("89214725000", masked)
+        self.assertNotIn("ТЕСТ улица", masked)
 
     def test_missing_or_invalid_owner_configuration_is_rejected(self):
         from app.reports.daily import ReportsConfigurationError, send_daily_report

@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import TypedDict
 
 
@@ -44,3 +45,16 @@ def parse_order_text(text: str) -> OrderData:
         except ValueError:
             data["order_at"] = None
     return data
+
+
+def parse_amount_note(value: str | None) -> Decimal:
+    """Parse the legacy free-text lead amount without making ingest fail."""
+    normalized = (value or "").replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    try:
+        amount = Decimal(normalized)
+    except InvalidOperation:
+        return Decimal("0.00")
+    if not amount.is_finite() or amount < 0:
+        return Decimal("0.00")
+    quantized = amount.quantize(Decimal("0.01"))
+    return quantized if quantized == amount else Decimal("0.00")

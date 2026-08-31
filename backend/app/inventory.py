@@ -170,28 +170,42 @@ def serialize_inventory_treatment(row: Treatment) -> InventoryTreatmentOut:
     )
 
 
-def create_treatment_with_inventory(
-    session: Session, payload: TreatmentIn
+def apply_treatment_with_inventory(
+    session: Session,
+    *,
+    lead_id: int | None,
+    object_id: int,
+    chemicals_used: list[ChemicalUsageIn],
+    performed_at: datetime,
+    performed_by: str,
+    notes: str | None,
+    allow_empty: bool = False,
 ) -> Treatment:
-    service_object = session.get(Object, payload.object_id)
+    if not chemicals_used and not allow_empty:
+        raise ValueError("at least one inventory usage is required")
+    inventory_ids = [row.inventory_id for row in chemicals_used]
+    if len(inventory_ids) != len(set(inventory_ids)):
+        raise ValueError("inventory_id must be unique within treatment")
+
+    service_object = session.get(Object, object_id)
     if service_object is None:
         raise InventoryNotFound("object not found")
-    if payload.lead_id is not None and session.get(Lead, payload.lead_id) is None:
+    if lead_id is not None and session.get(Lead, lead_id) is None:
         raise InventoryNotFound("lead not found")
 
     treatment = Treatment(
-        lead_id=payload.lead_id,
-        object_id=payload.object_id,
+        lead_id=lead_id,
+        object_id=object_id,
         chemicals_used=[],
-        performed_at=payload.performed_at,
-        performed_by=payload.performed_by,
-        notes=payload.notes,
+        performed_at=performed_at,
+        performed_by=performed_by,
+        notes=notes,
     )
     session.add(treatment)
     session.flush()
 
     audit_rows: list[dict[str, object]] = []
-    for requested in payload.chemicals_used:
+    for requested in chemicals_used:
         inventory = session.get(Inventory, requested.inventory_id)
         if inventory is None:
             raise InventoryNotFound("inventory not found")
@@ -221,7 +235,23 @@ def create_treatment_with_inventory(
         )
 
     treatment.chemicals_used = audit_rows
-    service_object.last_treatment_date = payload.performed_at.date()
+    service_object.last_treatment_date = performed_at.date()
+    session.flush()
+    return treatment
+
+
+def create_treatment_with_inventory(
+    session: Session, payload: TreatmentIn
+) -> Treatment:
+    treatment = apply_treatment_with_inventory(
+        session,
+        lead_id=payload.lead_id,
+        object_id=payload.object_id,
+        chemicals_used=payload.chemicals_used,
+        performed_at=payload.performed_at,
+        performed_by=payload.performed_by,
+        notes=payload.notes,
+    )
     session.commit()
     session.refresh(treatment)
     return treatment
