@@ -76,7 +76,7 @@ describe('Lead PII reveal', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'http://127.0.0.1:8000/api/leads/1?show_pii=true',
+      'http://localhost:8000/api/leads/1?show_pii=true',
     )
     expect(await screen.findByText('89214725000')).toBeTruthy()
     expect(screen.getByText('г. Архангельск, ул. Ленина, 10, кв. 5')).toBeTruthy()
@@ -142,7 +142,7 @@ describe('Lead PII reveal', () => {
     await user.click(screen.getByRole('button', { name: 'Сохранить изменения' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:8000/api/leads/1',
+      'http://localhost:8000/api/leads/1',
       expect.objectContaining({ method: 'PATCH' }),
     ))
     const call = fetchMock.mock.calls.find(([url, init]) =>

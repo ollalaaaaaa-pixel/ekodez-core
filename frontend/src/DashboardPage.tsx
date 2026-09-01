@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Col, DatePicker, Empty, List, Row, Spin, Statistic, Typography } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
+import { API } from './api'
 import './DashboardPage.css'
 
-const API = 'http://127.0.0.1:8000'
 const { RangePicker } = DatePicker
 
 type Daily = { date: string; revenue: string; expenses: string; profit: string }

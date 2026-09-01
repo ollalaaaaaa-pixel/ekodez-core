@@ -7,10 +7,9 @@ import {
   ArrowDownOutlined, ArrowUpOutlined, EyeOutlined, UploadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { API } from './api'
 import BankImportDrawer from './BankImportDrawer'
 import './FinancePage.css'
-
-const API = 'http://127.0.0.1:8000'
 
 type Tx = {
   id: number

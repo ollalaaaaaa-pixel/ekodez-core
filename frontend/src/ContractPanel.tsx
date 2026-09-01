@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Empty, Form, Input, Modal, Select, Space, Tag, Typography, message } from 'antd'
-
-const API = 'http://127.0.0.1:8000'
+import { API } from './api'
 
 export type ContractSummary = {
   id: number

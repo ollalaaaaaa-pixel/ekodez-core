@@ -15,9 +15,8 @@ import {
   message,
 } from 'antd'
 import { ExperimentOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
+import { API } from './api'
 import './InventoryPage.css'
-
-const API = 'http://127.0.0.1:8000'
 
 type Inventory = {
   id: number

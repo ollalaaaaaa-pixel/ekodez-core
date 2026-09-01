@@ -16,9 +16,8 @@ import {
   message,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
+import { API } from './api'
 import ContractPanel, { type ObjectSummary } from './ContractPanel'
-
-const API = 'http://127.0.0.1:8000'
 
 type ServiceObject = ObjectSummary
 

@@ -18,10 +18,9 @@ import {
 } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { CheckOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons'
+import { API } from './api'
 import './BankImportDrawer.css'
 import { INCOME_CATEGORIES } from './dictionaries'
-
-const API = 'http://127.0.0.1:8000'
 
 type BankPreviewRow = {
   operation_type: string

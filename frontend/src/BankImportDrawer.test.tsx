@@ -97,7 +97,7 @@ describe('BankImportDrawer review confirmation', () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledOnce())
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(fetchMock.mock.calls[2][0]).toBe(
-      'http://127.0.0.1:8000/api/bank/confirm',
+      'http://localhost:8000/api/bank/confirm',
     )
     const request = fetchMock.mock.calls[2][1]
     const payload = JSON.parse(String(request?.body)) as {

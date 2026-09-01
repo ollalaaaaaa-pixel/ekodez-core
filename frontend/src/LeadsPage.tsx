@@ -4,10 +4,9 @@ import {
   Segmented, Statistic, Table, Tag, Typography, message,
 } from 'antd'
 import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
+import { API } from './api'
 import { INCOME_CATEGORIES, LEAD_SOURCES, LEAD_SOURCE_LABELS } from './dictionaries'
 import './LeadsPage.css'
-
-const API = 'http://127.0.0.1:8000'
 
 type Lead = {
   id: number
