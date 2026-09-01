@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -29,8 +30,28 @@ from app.bank_import import (
 from app.bank_import import (
     classify_transaction as classify_bank_transaction,
 )
+from app.business_calendar import CalendarRangeError, add_business_days
 from app.channels import CHANNELS
+from app.contracts import (
+    BillingClientIn,
+    BillingClientOut,
+    ContractPeriodIn,
+    ContractPeriodOut,
+    DocumentProfileIn,
+    InspectionReportIn,
+    InspectionReportOut,
+    get_or_create_period,
+    parse_month,
+    serialize_billing_client,
+    serialize_inspection,
+    serialize_period,
+)
 from app.db import create_app_engine
+from app.document_packages import (
+    DocumentTemplateError,
+    build_month_package,
+    resolve_package_file,
+)
 from app.finance_categories import (
     INCOME_CATEGORIES_V1,
     classify_finance,
@@ -54,8 +75,11 @@ from app.lead_parser import parse_amount_note, parse_order_text
 from app.master_workflow import PERFORMERS
 from app.models import (
     ChemicalUsage,
+    Client,
     Contract,
+    ContractPeriod,
     ExpenseCategory,
+    InspectionReport,
     Inventory,
     Lead,
     Object,
@@ -86,6 +110,8 @@ from app.reports.daily import (
 from app.reports.scheduler import reports_status, start_report_scheduler
 from app.security.pii import (
     decrypt_pii,
+    decrypt_sensitive_mapping,
+    encrypt_sensitive_mapping,
     mask_address,
     mask_name,
     mask_phone,
@@ -97,6 +123,10 @@ from app.tg_poller import poller_started, start_poller
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+DOCUMENT_OUTPUT_ROOT = Path(r"C:\D\Экодез\hostels-docs")
+DOCUMENT_PROFILE_PATH = DOCUMENT_OUTPUT_ROOT / "company-profile.json"
+DOCUMENT_TEMPLATE_DIR = Path(__file__).parents[2] / "docs" / "templates"
 
 engine = create_app_engine(DATABASE_URL)
 
@@ -410,7 +440,15 @@ def send_daily_report_manually(request: Request):
 def _contract_from_input(payload: ContractIn) -> Contract:
     return Contract(
         number=payload.number.strip(),
-        monthly_amount=payload.monthly_amount,
+        price=payload.price,
+        contract_date=payload.contract_date,
+        periodicity=payload.periodicity,
+        service_months=payload.service_months,
+        payment_term_business_days=payload.payment_term_business_days,
+        default_ksp=payload.default_ksp,
+        default_derat_glue=payload.default_derat_glue,
+        default_baits=payload.default_baits,
+        default_disinsection_glue=payload.default_disinsection_glue,
         start_date=payload.start_date,
         end_date=payload.end_date,
     )
@@ -663,7 +701,19 @@ def update_object(object_id: int, payload: ObjectUpdate):
                 row.contract = _contract_from_input(payload.contract)
             else:
                 old_contract.number = payload.contract.number
-                old_contract.monthly_amount = payload.contract.monthly_amount
+                old_contract.price = payload.contract.price
+                old_contract.contract_date = payload.contract.contract_date
+                old_contract.periodicity = payload.contract.periodicity
+                old_contract.service_months = payload.contract.service_months
+                old_contract.payment_term_business_days = (
+                    payload.contract.payment_term_business_days
+                )
+                old_contract.default_ksp = payload.contract.default_ksp
+                old_contract.default_derat_glue = payload.contract.default_derat_glue
+                old_contract.default_baits = payload.contract.default_baits
+                old_contract.default_disinsection_glue = (
+                    payload.contract.default_disinsection_glue
+                )
                 old_contract.start_date = payload.contract.start_date
                 old_contract.end_date = payload.contract.end_date
         try:
@@ -708,6 +758,548 @@ def list_object_treatments(object_id: int):
             .order_by(Treatment.performed_at.desc())
         ).all()
         return [serialize_treatment(row) for row in rows]
+
+
+def _mask_identifier(value: str | None) -> str | None:
+    if not value:
+        return None
+    if len(value) <= 4:
+        return "***"
+    return f"{value[:2]}{'*' * (len(value) - 4)}{value[-2:]}"
+
+
+@app.put("/api/objects/{object_id}/billing-client", response_model=BillingClientOut)
+def save_billing_client(object_id: int, payload: BillingClientIn):
+    encrypted = encrypt_sensitive_mapping(payload.model_dump())
+    if encrypted is None:
+        raise HTTPException(status_code=503, detail="PII encryption unavailable")
+    with Session(engine) as session:
+        service_object = session.get(Object, object_id)
+        if service_object is None:
+            raise HTTPException(status_code=404, detail="not found")
+        row = session.scalar(
+            select(Client)
+            .where(Client.object_id == object_id)
+            .order_by(Client.id)
+            .limit(1)
+        )
+        if row is None:
+            row = Client(name=payload.name, object_id=object_id)
+            session.add(row)
+        row.client_type = payload.client_type
+        row.name = (
+            mask_name(payload.name)
+            if payload.client_type == "individual"
+            else payload.name
+        )
+        row.phone = mask_phone(payload.phone) or None
+        row.representative = mask_name(payload.representative) or None
+        row.representative_role = payload.representative_role
+        row.inn_masked = _mask_identifier(payload.inn)
+        row.kpp_masked = _mask_identifier(payload.kpp)
+        row.registration_number_masked = _mask_identifier(payload.registration_number)
+        row.legal_address_masked = (
+            mask_address(payload.legal_address) if payload.legal_address else None
+        )
+        row.bank_details_masked = "***" if payload.bank_details else None
+        row.encrypted_requisites = encrypted
+        session.commit()
+        session.refresh(row)
+        return serialize_billing_client(row)
+
+
+@app.get("/api/objects/{object_id}/billing-client", response_model=BillingClientOut)
+def get_billing_client(
+    object_id: int, request: Request, response: Response, show_pii: bool = False
+):
+    with Session(engine) as session:
+        row = session.scalar(
+            select(Client)
+            .where(Client.object_id == object_id)
+            .order_by(Client.id)
+            .limit(1)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not show_pii:
+            return serialize_billing_client(row)
+        client_host = request.client.host if request.client else ""
+        if client_host not in ("127.0.0.1", "::1"):
+            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        try:
+            values = decrypt_sensitive_mapping(row.encrypted_requisites)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail="PII is unavailable") from error
+        response.headers["Cache-Control"] = "no-store"
+        print(
+            json.dumps(
+                {
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "event": "billing_requisites_revealed",
+                    "object_id": object_id,
+                    "client_id": row.id,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return serialize_billing_client(row, values)
+
+
+def _contract_or_404(session: Session, contract_id: int) -> Contract:
+    contract = session.get(Contract, contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="contract not found")
+    return contract
+
+
+@app.post(
+    "/api/contracts/{contract_id}/inspection-reports/{period}",
+    response_model=InspectionReportOut,
+)
+def save_inspection_report(contract_id: int, period: str, payload: InspectionReportIn):
+    try:
+        report_month = parse_month(period)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with Session(engine) as session:
+        contract = _contract_or_404(session, contract_id)
+        row = session.scalar(
+            select(InspectionReport).where(
+                InspectionReport.contract_id == contract_id,
+                InspectionReport.report_month == report_month,
+            )
+        )
+        if row is None:
+            row = InspectionReport(
+                contract=contract,
+                report_month=report_month,
+                ksp_count=contract.default_ksp,
+                derat_glue_count=contract.default_derat_glue,
+                bait_count=contract.default_baits,
+                rodents_caught=0,
+                deratization_result="not_required",
+                disinsection_glue_count=contract.default_disinsection_glue,
+                insects_caught=0,
+                disinsection_result="not_required",
+                status="draft",
+            )
+            session.add(row)
+        for field in payload.model_fields_set:
+            value = getattr(payload, field)
+            if value is not None or field in {"inspection_date", "control_date"}:
+                setattr(row, field, value)
+        session.commit()
+        session.refresh(row)
+        return serialize_inspection(row)
+
+
+def _apply_period_input(
+    session: Session, row: ContractPeriod, payload: ContractPeriodIn
+) -> None:
+    if (
+        "transaction_id" in payload.model_fields_set
+        and payload.transaction_id is not None
+    ):
+        transaction = session.get(Transaction, payload.transaction_id)
+        contract_object_id = row.contract.object.id if row.contract.object else None
+        if (
+            transaction is None
+            or transaction.kind != "income"
+            or transaction.review_required
+            or transaction.object_id != contract_object_id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="transaction must be a confirmed income for this object",
+            )
+    for field in payload.model_fields_set:
+        setattr(row, field, getattr(payload, field))
+    if row.work_act_status == "signed" and row.work_act_signed_at is None:
+        raise HTTPException(status_code=422, detail="signed act requires signed_at")
+
+
+@app.post(
+    "/api/contracts/{contract_id}/periods/{period}",
+    response_model=ContractPeriodOut,
+)
+def save_contract_period(contract_id: int, period: str, payload: ContractPeriodIn):
+    try:
+        period_month = parse_month(period)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with Session(engine) as session:
+        contract = _contract_or_404(session, contract_id)
+        try:
+            row = get_or_create_period(session, contract, period_month)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        _apply_period_input(session, row, payload)
+        session.commit()
+        session.refresh(row)
+        return serialize_period(row)
+
+
+@app.patch("/api/contract-periods/{period_id}", response_model=ContractPeriodOut)
+def update_contract_period(period_id: int, payload: ContractPeriodIn):
+    with Session(engine) as session:
+        row = session.get(ContractPeriod, period_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        _apply_period_input(session, row, payload)
+        try:
+            session.commit()
+            session.refresh(row)
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="constraint violation"
+            ) from error
+        return serialize_period(row)
+
+
+@app.get("/api/objects/{object_id}/contract-timeline")
+def get_contract_timeline(object_id: int) -> list[dict[str, object]]:
+    with Session(engine) as session:
+        service_object = session.get(Object, object_id)
+        if service_object is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if service_object.contract is None:
+            return []
+        events: list[dict[str, object]] = []
+        for report in service_object.contract.inspection_reports:
+            events.append(
+                {
+                    "date": (report.signed_at or report.created_at).isoformat(),
+                    "type": f"inspection_{report.status}",
+                    "month": report.report_month.isoformat(),
+                }
+            )
+        for row in service_object.contract.periods:
+            events.append(
+                {
+                    "date": (row.generated_at or row.created_at).isoformat(),
+                    "type": (
+                        "payment_linked" if row.transaction_id else "period_created"
+                    ),
+                    "month": row.period_month.isoformat(),
+                }
+            )
+        return sorted(events, key=lambda item: str(item["date"]), reverse=True)
+
+
+def _document_profile() -> dict[str, str]:
+    try:
+        payload = json.loads(DOCUMENT_PROFILE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DocumentTemplateError(
+            "company document profile is not configured"
+        ) from error
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("encrypted_profile"), str
+    ):
+        raise DocumentTemplateError("company document profile is not configured")
+    try:
+        decrypted = decrypt_sensitive_mapping(payload["encrypted_profile"])
+    except ValueError as error:
+        raise DocumentTemplateError(
+            "company document profile is unavailable"
+        ) from error
+    required = {
+        "EXECUTOR_BANK_DETAILS",
+        "EXECUTOR_INN",
+        "EXECUTOR_OGRNIP",
+        "TAX_MODE",
+    }
+    values = {
+        str(key): str(value).strip()
+        for key, value in decrypted.items()
+        if isinstance(value, str)
+    }
+    if any(not values.get(key) for key in required):
+        raise DocumentTemplateError("company document profile is incomplete")
+    return values
+
+
+@app.get("/api/document-profile/status")
+def get_document_profile_status() -> dict[str, bool]:
+    try:
+        _document_profile()
+    except DocumentTemplateError:
+        return {"configured": False}
+    return {"configured": True}
+
+
+@app.put("/api/document-profile")
+def save_document_profile(
+    payload: DocumentProfileIn, request: Request
+) -> dict[str, str]:
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(
+            status_code=403, detail="document profile is localhost only"
+        )
+    encrypted = encrypt_sensitive_mapping(
+        {
+            "EXECUTOR_BANK_DETAILS": payload.executor_bank_details,
+            "EXECUTOR_INN": payload.executor_inn,
+            "EXECUTOR_OGRNIP": payload.executor_ogrnip,
+            "TAX_MODE": payload.tax_mode,
+        }
+    )
+    if encrypted is None:
+        raise HTTPException(status_code=503, detail="PII encryption unavailable")
+    DOCUMENT_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = DOCUMENT_PROFILE_PATH.with_name(
+        f".{DOCUMENT_PROFILE_PATH.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        temporary.write_text(
+            json.dumps({"encrypted_profile": encrypted}), encoding="utf-8"
+        )
+        temporary.replace(DOCUMENT_PROFILE_PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"status": "configured"}
+
+
+def _client_representation(values: dict[str, str | None]) -> str:
+    name = values.get("name") or ""
+    representative = values.get("representative") or ""
+    role = values.get("representative_role") or "представителя"
+    if values.get("client_type") == "legal_entity" and representative:
+        return f"{name} в лице {role} {representative}"
+    if values.get("client_type") == "sole_proprietor":
+        return f"Индивидуальный предприниматель {name}"
+    return name
+
+
+def _package_values(
+    service_object: Object,
+    contract: Contract,
+    report: InspectionReport,
+    period: ContractPeriod,
+    client_values: dict[str, str | None],
+) -> dict[str, str]:
+    if report.inspection_date is None:
+        raise DocumentTemplateError("inspection date is required")
+    if period.paid_service_due and period.invoice_date is None:
+        raise DocumentTemplateError("invoice date is required")
+    if period.paid_service_due and not period.invoice_number:
+        raise DocumentTemplateError("invoice number is required")
+    price = period.price_snapshot or contract.price
+    price_text = f"{Decimal(price):.2f}"
+    inspection_date = report.control_date or report.inspection_date
+    recommendations = []
+    if period.preparations:
+        recommendations.append(f"Применённые препараты: {period.preparations}")
+    recommendations.extend(period.extra_services or [])
+    extra = list(period.extra_services or [])[:2]
+    due_date = ""
+    if period.invoice_date is not None:
+        try:
+            due_date = add_business_days(
+                period.invoice_date, contract.payment_term_business_days
+            ).strftime("%d.%m.%Y")
+        except CalendarRangeError as error:
+            raise DocumentTemplateError(str(error)) from error
+    profile = _document_profile()
+    values = {
+        "ADDRESS": service_object.address,
+        "APPENDIX_NUM": "1",
+        "AREA": f"{Decimal(service_object.area_sqm):f}",
+        "BAIT_POINTS": str(report.bait_count),
+        "BAIT_RESULT": (
+            "следов нет" if report.rodents_caught == 0 else "обнаружены следы"
+        ),
+        "CLIENT_NAME": client_values.get("name") or "",
+        "CLIENT_REMARKS": "Претензий нет",
+        "CLIENT_REPRESENTATION": _client_representation(client_values),
+        "CLIENT_SIGNATURE_ROLE": client_values.get("representative_role") or "Заказчик",
+        "CLIENT_TYPE": client_values.get("client_type") or "",
+        "CONCLUSION": (
+            "Обработка не требуется"
+            if report.deratization_result == "not_required"
+            and report.disinsection_result == "not_required"
+            else "Обработка требуется и выполнена"
+        ),
+        "CONTRACT_DATE": (
+            contract.contract_date.strftime("%d.%m.%Y")
+            if contract.contract_date
+            else ""
+        ),
+        "CONTRACT_NUM": contract.number,
+        "DIRECTOR_SHORT": client_values.get("representative") or "",
+        "INN": client_values.get("inn") or "",
+        "INSECT_ACTIVITY_COUNT": str(report.insects_caught),
+        "INSECT_ACTIVITY_NOTE": period.infestation_degree,
+        "INSECT_GLUE_TRAPS": str(report.disinsection_glue_count),
+        "INSECT_TRAP_RESULT": (
+            "не обнаружены" if report.insects_caught == 0 else "обнаружены"
+        ),
+        "INSPECTION_DATE": inspection_date.strftime("%d.%m.%Y"),
+        "KSP_COUNT": str(report.ksp_count),
+        "KSP_RESULT": (
+            "следов нет" if report.rodents_caught == 0 else "обнаружены следы"
+        ),
+        "OBJECT_NAME": service_object.name,
+        "RECOMMENDATIONS": "; ".join(recommendations) or "Нет",
+        "RODENT_ACTIVITY_COUNT": str(report.rodents_caught),
+        "RODENT_ACTIVITY_NOTE": period.infestation_degree,
+        "RODENT_GLUE_TRAPS": str(report.derat_glue_count),
+        "RODENT_TRAP_RESULT": (
+            "не обнаружены" if report.rodents_caught == 0 else "обнаружены"
+        ),
+        "ACT_DATE": (period.invoice_date or inspection_date).strftime("%d.%m.%Y"),
+        "ACT_NUM": period.invoice_number or "",
+        "LINE_TOTAL_1": price_text,
+        "LINE_TOTAL_2": "",
+        "LINE_TOTAL_3": "",
+        "QTY_1": "1",
+        "QTY_2": "1" if len(extra) > 0 else "",
+        "QTY_3": "1" if len(extra) > 1 else "",
+        "SERVICE_1": "Услуги по договору санитарного обслуживания",
+        "SERVICE_2": extra[0] if len(extra) > 0 else "",
+        "SERVICE_3": extra[1] if len(extra) > 1 else "",
+        "TOTAL": price_text,
+        "UNIT_1": "усл.",
+        "UNIT_2": "усл." if len(extra) > 0 else "",
+        "UNIT_3": "усл." if len(extra) > 1 else "",
+        "UNIT_PRICE_1": price_text,
+        "UNIT_PRICE_2": "",
+        "UNIT_PRICE_3": "",
+        "WORK_RESULT_AND_SAFETY": ("Работы выполнены в полном объёме. Претензий нет."),
+        "INVOICE_DATE": (
+            period.invoice_date.strftime("%d.%m.%Y") if period.invoice_date else ""
+        ),
+        "INVOICE_NUM": period.invoice_number or "",
+        "PAYMENT_DUE_DATE": due_date,
+        "PRICE": price_text,
+        "SERVICE_NAME": "Услуги по договору санитарного обслуживания",
+        "TOTAL_WORDS": f"{price_text} рублей",
+    }
+    values.update(profile)
+    return values
+
+
+@app.post(
+    "/api/contract-periods/{period_id}/generate", response_model=ContractPeriodOut
+)
+def generate_contract_period_package(period_id: int, request: Request):
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(
+            status_code=403, detail="document generation is localhost only"
+        )
+    with Session(engine) as session:
+        period = session.get(ContractPeriod, period_id)
+        if period is None:
+            raise HTTPException(status_code=404, detail="not found")
+        contract = period.contract
+        service_object = contract.object
+        if service_object is None:
+            raise HTTPException(status_code=409, detail="contract has no object")
+        report = session.scalar(
+            select(InspectionReport).where(
+                InspectionReport.contract_id == contract.id,
+                InspectionReport.report_month == period.period_month,
+            )
+        )
+        client = session.scalar(
+            select(Client)
+            .where(Client.object_id == service_object.id)
+            .order_by(Client.id)
+            .limit(1)
+        )
+        if report is None or client is None:
+            raise HTTPException(
+                status_code=409, detail="inspection and billing client are required"
+            )
+        try:
+            client_values = decrypt_sensitive_mapping(client.encrypted_requisites)
+            values = _package_values(
+                service_object, contract, report, period, client_values
+            )
+            manifest = build_month_package(
+                template_dir=DOCUMENT_TEMPLATE_DIR,
+                output_root=DOCUMENT_OUTPUT_ROOT,
+                object_name=service_object.name,
+                period_month=period.period_month,
+                paid_service_due=period.paid_service_due,
+                values=values,
+            )
+        except (ValueError, DocumentTemplateError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        period.generated_at = datetime.now(UTC)
+        period.file_manifest = [
+            {
+                "version": manifest.version,
+                "kind": item.kind,
+                "name": item.name,
+                "size": item.size,
+                "sha256": item.sha256,
+            }
+            for item in manifest.files
+        ]
+        session.commit()
+        session.refresh(period)
+        print(
+            json.dumps(
+                {
+                    "event": "contract_package_generated",
+                    "object_id": service_object.id,
+                    "contract_id": contract.id,
+                    "period_id": period.id,
+                    "version": manifest.version,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return serialize_period(period)
+
+
+@app.get("/api/contract-periods/{period_id}/files/{file_name}")
+def download_contract_period_file(period_id: int, file_name: str, request: Request):
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=403, detail="document access is localhost only")
+    with Session(engine) as session:
+        period = session.get(ContractPeriod, period_id)
+        if period is None:
+            raise HTTPException(status_code=404, detail="not found")
+        entry = next(
+            (
+                item
+                for item in period.file_manifest or []
+                if item.get("name") == file_name
+                and isinstance(item.get("version"), int)
+            ),
+            None,
+        )
+        service_object = period.contract.object
+        if entry is None or service_object is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        version = entry.get("version")
+        if not isinstance(version, int):
+            raise HTTPException(status_code=404, detail="document not found")
+        try:
+            path = resolve_package_file(
+                output_root=DOCUMENT_OUTPUT_ROOT,
+                object_name=service_object.name,
+                period_month=period.period_month,
+                version=version,
+                file_name=file_name,
+            )
+        except DocumentTemplateError as error:
+            raise HTTPException(status_code=404, detail="document not found") from error
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="document not found")
+        return FileResponse(
+            path=str(path),
+            filename=file_name,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+        )
 
 
 @app.get("/api/transactions", response_model=list[TransactionOut])

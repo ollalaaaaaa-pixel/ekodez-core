@@ -12,7 +12,15 @@ const objectRow = {
   contract: {
     id: 1,
     number: '17/08',
-    monthly_amount: '5000.00',
+    price: '5000.00',
+    contract_date: '2026-08-17',
+    periodicity: 'monthly',
+    service_months: [],
+    payment_term_business_days: 5,
+    default_ksp: 5,
+    default_derat_glue: 5,
+    default_baits: 5,
+    default_disinsection_glue: 6,
     start_date: null,
     end_date: null,
   },
@@ -53,6 +61,9 @@ describe('Objects screen', () => {
           },
         ])
       }
+      if (url.endsWith('/api/objects/1/contract-timeline')) {
+        return jsonResponse([])
+      }
       listCalls += 1
       return jsonResponse(listCalls === 1 ? [] : [objectRow])
     })
@@ -64,7 +75,9 @@ describe('Objects screen', () => {
     await user.type(screen.getByPlaceholderText('Адрес'), 'П. Галушина 21 к.1')
     await user.type(screen.getByPlaceholderText('Площадь, м²'), '200')
     await user.type(screen.getByPlaceholderText('Номер договора'), '17/08')
-    await user.type(screen.getByPlaceholderText('Абонплата, ₽/мес'), '5000')
+    await user.type(screen.getByPlaceholderText('Цена договора, ₽'), '5000')
+    await user.click(screen.getByLabelText('Периодичность'))
+    await user.click(await screen.findByText('Ежемесячно'))
     await user.click(screen.getByRole('button', { name: 'Сохранить' }))
 
     expect(await screen.findByText('СК Ворон')).toBeTruthy()
@@ -74,7 +87,7 @@ describe('Objects screen', () => {
 
     expect(await screen.findByText('Карточка объекта')).toBeTruthy()
     expect(screen.getByText('Договор 17/08')).toBeTruthy()
-    expect(screen.getByText('5 000.00 ₽/мес')).toBeTruthy()
+    expect(screen.getByText(/5\s000,00 ₽\/мес/)).toBeTruthy()
     expect(screen.getByText('раздевалка')).toBeTruthy()
     expect(screen.getByText('01.08.2026')).toBeTruthy()
     expect(screen.getByText('01.09.2026')).toBeTruthy()
@@ -82,6 +95,50 @@ describe('Objects screen', () => {
     expect(await screen.findByText('Профилактика')).toBeTruthy()
     expect(screen.getByText('Документы')).toBeTruthy()
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+  })
+
+  test('contract price has no default and monthly package exposes required fields', async () => {
+    const objectWithoutContract = { ...objectRow, contract: null }
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([objectWithoutContract])
+      if (url.endsWith('/api/objects/1/treatments')) return jsonResponse([])
+      if (url.endsWith('/api/objects/1/contract-timeline')) return jsonResponse([])
+      return jsonResponse([])
+    })
+    const user = userEvent.setup()
+
+    render(<ObjectsPage />)
+    await user.click((await screen.findAllByRole('button', { name: 'Открыть' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Настроить договор' }))
+    expect((screen.getByLabelText('Цена договора') as HTMLInputElement).value).toBe('')
+  })
+
+  test('package form includes inspection and payment fields', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([objectRow])
+      if (url.endsWith('/api/objects/1/treatments')) return jsonResponse([])
+      if (url.endsWith('/api/objects/1/contract-timeline')) return jsonResponse([])
+      if (url.endsWith('/api/transactions')) return jsonResponse([])
+      return jsonResponse([])
+    })
+    const user = userEvent.setup()
+
+    render(<ObjectsPage />)
+    await user.click((await screen.findAllByRole('button', { name: 'Открыть' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Пакет за месяц' }))
+
+    expect(screen.getByLabelText('Месяц')).toBeTruthy()
+    expect(screen.getByLabelText('Дата обследования')).toBeTruthy()
+    expect(screen.getByLabelText('Контрольная дата')).toBeTruthy()
+    expect(screen.getByLabelText('Препараты')).toBeTruthy()
+    expect((screen.getByLabelText('Степень заражения') as HTMLInputElement).value).toBe(
+      'начальная',
+    )
+    expect(screen.getByLabelText('Дополнительные услуги')).toBeTruthy()
+    expect(screen.getByLabelText('Номер счёта')).toBeTruthy()
+    expect(screen.getByLabelText('Привязать оплату')).toBeTruthy()
   })
 
   test('does not mix treatment history when cards are opened quickly', async () => {

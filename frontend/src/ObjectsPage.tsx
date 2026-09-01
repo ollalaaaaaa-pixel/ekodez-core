@@ -16,29 +16,11 @@ import {
   message,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
+import ContractPanel, { type ObjectSummary } from './ContractPanel'
 
 const API = 'http://127.0.0.1:8000'
 
-type Contract = {
-  id: number
-  number: string
-  monthly_amount: string
-  start_date: string | null
-  end_date: string | null
-}
-
-type ServiceObject = {
-  id: number
-  name: string
-  address: string
-  type: string
-  area_sqm: string
-  contract: Contract | null
-  risk_points: string[]
-  last_treatment_date: string | null
-  next_treatment_date: string | null
-  status: string
-}
+type ServiceObject = ObjectSummary
 
 type Treatment = {
   id: number
@@ -53,7 +35,9 @@ type ObjectForm = {
   type: string
   area_sqm: string
   contract_number?: string
-  monthly_amount?: string
+  contract_price?: string
+  contract_periodicity?: 'monthly' | 'semiannual' | 'custom'
+  service_months?: number[]
   risk_points?: string
 }
 
@@ -83,14 +67,9 @@ const statusMeta: Record<string, { text: string; color: string }> = {
 const typeLabel = (value: string) =>
   typeOptions.find((option) => option.value === value)?.label ?? value
 
-const moneyLabel = (value: string) => {
-  const [whole, fraction = ''] = value.split('.')
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
-  return `${grouped}.${fraction.padEnd(2, '0').slice(0, 2)} ₽/мес`
-}
-
 const decimalString = (value: string | undefined) => {
-  const normalized = (value ?? '0').trim().replace(',', '.')
+  const normalized = (value ?? '').trim().replace(',', '.')
+  if (!normalized) return ''
   const [whole = '0', fraction = ''] = normalized.split('.')
   return `${whole}.${fraction.padEnd(2, '0').slice(0, 2)}`
 }
@@ -111,6 +90,7 @@ export default function ObjectsPage() {
   const listRequest = useRef(0)
   const historyRequest = useRef(0)
   const [form] = Form.useForm<ObjectForm>()
+  const createPeriodicity = Form.useWatch('contract_periodicity', form)
 
   const load = useCallback(() => {
     const requestId = ++listRequest.current
@@ -144,7 +124,10 @@ export default function ObjectsPage() {
         contract: values.contract_number
           ? {
               number: values.contract_number,
-              monthly_amount: decimalString(values.monthly_amount),
+              price: decimalString(values.contract_price),
+              periodicity: values.contract_periodicity,
+              service_months:
+                values.contract_periodicity === 'monthly' ? [] : values.service_months,
             }
           : null,
         risk_points: (values.risk_points ?? '')
@@ -176,6 +159,11 @@ export default function ObjectsPage() {
     historyRequest.current += 1
     setTreatments([])
     setSelected(null)
+  }
+
+  const objectUpdated = (updated: ServiceObject) => {
+    setSelected(updated)
+    setRows((current) => current.map((row) => (row.id === updated.id ? updated : row)))
   }
 
   const columns = [
@@ -283,14 +271,22 @@ export default function ObjectsPage() {
             <Input placeholder="Номер договора" />
           </Form.Item>
           <Form.Item
-            name="monthly_amount"
-            label="Абонентская плата"
+            name="contract_price"
+            label="Цена договора"
             rules={[
               { pattern: /^\d+(?:[.,]\d{1,2})?$/, message: 'Введите сумму, не более 2 знаков после запятой' },
             ]}
           >
-            <Input inputMode="decimal" placeholder="Абонплата, ₽/мес" />
+            <Input inputMode="decimal" placeholder="Цена договора, ₽" />
           </Form.Item>
+          <Form.Item name="contract_periodicity" label="Периодичность">
+            <Select options={[{ value: 'monthly', label: 'Ежемесячно' }, { value: 'semiannual', label: '2 раза в год' }, { value: 'custom', label: 'Своя' }]} />
+          </Form.Item>
+          {createPeriodicity && createPeriodicity !== 'monthly' ? (
+            <Form.Item name="service_months" label="Оплачиваемые месяцы">
+              <Select mode="multiple" options={Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: String(index + 1) }))} />
+            </Form.Item>
+          ) : null}
           <Form.Item name="risk_points" label="Точки риска">
             <Input placeholder="кухня, подвал, раздевалка" />
           </Form.Item>
@@ -326,16 +322,7 @@ export default function ObjectsPage() {
               </Descriptions.Item>
             </Descriptions>
 
-            <Card title="Документы" size="small">
-              {selected.contract ? (
-                <Space orientation="vertical">
-                  <Typography.Text strong>Договор {selected.contract.number}</Typography.Text>
-                  <Typography.Text>{moneyLabel(selected.contract.monthly_amount)}</Typography.Text>
-                </Space>
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Договор не указан" />
-              )}
-            </Card>
+            <ContractPanel object={selected} onObjectUpdated={objectUpdated} />
 
             <Card title="История обработок" size="small">
               {treatments.length ? (

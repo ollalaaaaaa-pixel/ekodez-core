@@ -11,9 +11,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
+from app.business_calendar import CalendarRangeError, add_business_days
 from app.inventory import LOW_STOCK_RATIO
 from app.master_workflow import list_due_leads
-from app.models import Inventory, Lead, Object, SentReport, Transaction
+from app.models import ContractPeriod, Inventory, Lead, Object, SentReport, Transaction
 from app.security.pii import decrypt_pii
 from app.tg_poller import _send_message, send_due_lead_cards, send_message
 
@@ -67,6 +68,26 @@ class ReportSnapshot:
     disputed_operations: int
     overdue_objects: tuple[OverdueObject, ...]
     low_stock_items: tuple[LowStockItem, ...]
+
+
+@dataclass(frozen=True)
+class ActReminder:
+    object_name: str
+    contract_number: str
+
+
+@dataclass(frozen=True)
+class OverduePaymentReminder:
+    object_name: str
+    contract_number: str
+    amount: Decimal
+    due_date: date
+
+
+@dataclass(frozen=True)
+class ContractReminders:
+    acts_to_issue: tuple[ActReminder, ...]
+    overdue_payments: tuple[OverduePaymentReminder, ...]
 
 
 def _money(value: Decimal | int | None) -> Decimal:
@@ -266,6 +287,97 @@ def format_due_leads_section(
     return lines
 
 
+def build_contract_reminders(session: Session, current_date: date) -> ContractReminders:
+    acts: list[ActReminder] = []
+    if current_date.day == 25:
+        objects = session.scalars(
+            select(Object)
+            .where(Object.contract_id.is_not(None), Object.status != "inactive")
+            .order_by(Object.name, Object.id)
+        ).all()
+        period_month = current_date.replace(day=1)
+        for service_object in objects:
+            contract = service_object.contract
+            if contract is None:
+                continue
+            generated = session.scalar(
+                select(ContractPeriod.id).where(
+                    ContractPeriod.contract_id == contract.id,
+                    ContractPeriod.period_month == period_month,
+                    ContractPeriod.generated_at.is_not(None),
+                )
+            )
+            if generated is None:
+                acts.append(
+                    ActReminder(
+                        object_name=service_object.name,
+                        contract_number=contract.number,
+                    )
+                )
+
+    overdue: list[OverduePaymentReminder] = []
+    periods = session.scalars(
+        select(ContractPeriod)
+        .where(
+            ContractPeriod.paid_service_due.is_(True),
+            ContractPeriod.work_act_status == "signed",
+            ContractPeriod.work_act_signed_at.is_not(None),
+            ContractPeriod.transaction_id.is_(None),
+        )
+        .order_by(ContractPeriod.period_month, ContractPeriod.id)
+    ).all()
+    for period in periods:
+        assert period.work_act_signed_at is not None
+        try:
+            due_date = add_business_days(
+                period.work_act_signed_at.date(),
+                period.contract.payment_term_business_days,
+            )
+        except CalendarRangeError:
+            continue
+        if current_date <= due_date:
+            continue
+        overdue_object = period.contract.object
+        if overdue_object is None or overdue_object.status == "inactive":
+            continue
+        overdue.append(
+            OverduePaymentReminder(
+                object_name=overdue_object.name,
+                contract_number=period.contract.number,
+                amount=_money(period.price_snapshot),
+                due_date=due_date,
+            )
+        )
+    return ContractReminders(tuple(acts), tuple(overdue))
+
+
+def format_contract_reminders(reminders: ContractReminders) -> str:
+    lines: list[str] = []
+    if reminders.acts_to_issue:
+        lines.extend(["", "Документы", "Пора выдать акты:"])
+        _append_truncated(
+            lines,
+            [
+                f"• {_truncate_label(row.object_name)} — договор "
+                f"{_truncate_label(row.contract_number)}"
+                for row in reminders.acts_to_issue
+            ],
+            len(reminders.acts_to_issue),
+        )
+    if reminders.overdue_payments:
+        lines.extend(["", "Просрочена оплата:"])
+        _append_truncated(
+            lines,
+            [
+                f"• {_truncate_label(row.object_name)} — "
+                f"{_format_money(row.amount)} ₽, срок {row.due_date:%d.%m.%Y}"
+                for row in reminders.overdue_payments
+            ],
+            len(reminders.overdue_payments),
+        )
+    return "\n".join(lines)
+
+
 def reports_configured() -> bool:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     owner_id = os.getenv("OWNER_TG_ID", "").strip()
@@ -362,9 +474,11 @@ def _send_daily_report_locked(
                     raise ManualReportCooldown(max(1, remaining))
 
         snapshot = build_daily_snapshot(session, send_date - timedelta(days=1))
+        contract_reminders = build_contract_reminders(session, send_date)
         message = "\n".join(
             [
                 format_daily_report(snapshot),
+                format_contract_reminders(contract_reminders),
                 *format_due_leads_section(session, send_date, reveal_pii=True),
             ]
         )

@@ -100,6 +100,14 @@ def encrypt_pii(values: Mapping[str, Any]) -> str | None:
     return fernet.encrypt(encoded).decode("ascii")
 
 
+def encrypt_sensitive_mapping(values: Mapping[str, Any]) -> str | None:
+    fernet = _fernet()
+    if fernet is None:
+        return None
+    encoded = json.dumps(dict(values), ensure_ascii=False).encode("utf-8")
+    return fernet.encrypt(encoded).decode("ascii")
+
+
 def decrypt_pii(token: str | None) -> dict[str, str | None]:
     fernet = _fernet()
     if fernet is None or not token:
@@ -113,6 +121,23 @@ def decrypt_pii(token: str | None) -> dict[str, str | None]:
         field: value if isinstance(value, str) or value is None else str(value)
         for field in PII_FIELDS
         for value in (payload.get(field),)
+    }
+
+
+def decrypt_sensitive_mapping(token: str | None) -> dict[str, str | None]:
+    fernet = _fernet()
+    if fernet is None or not token:
+        raise ValueError("PII is unavailable")
+    try:
+        decoded = fernet.decrypt(token.encode("ascii"))
+        payload = json.loads(decoded.decode("utf-8"))
+    except (InvalidToken, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("PII is unavailable") from error
+    if not isinstance(payload, dict):
+        raise ValueError("PII is unavailable")
+    return {
+        str(field): value if isinstance(value, str) or value is None else str(value)
+        for field, value in payload.items()
     }
 
 

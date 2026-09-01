@@ -27,7 +27,12 @@ class ObjectModelTest(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
         with Session(engine) as session:
-            contract = Contract(number="17/08", monthly_amount=Decimal("5000.00"))
+            contract = Contract(
+                number="17/08",
+                price=Decimal("5000.00"),
+                periodicity="monthly",
+                service_months=[],
+            )
             service_object = Object(
                 name="СК Ворон",
                 address="П. Галушина 21 к.1",
@@ -102,7 +107,12 @@ class ObjectApiTest(unittest.TestCase):
             "address": "П. Галушина 21 к.1",
             "type": "gym",
             "area_sqm": "200.00",
-            "contract": {"number": "17/08", "monthly_amount": "5000.00"},
+            "contract": {
+                "number": "17/08",
+                "price": "5000.00",
+                "periodicity": "monthly",
+                "service_months": [],
+            },
             "risk_points": ["раздевалка", "подвал"],
             "last_treatment_date": "2026-08-01",
             "next_treatment_date": "2026-09-01",
@@ -119,7 +129,7 @@ class ObjectApiTest(unittest.TestCase):
         self.assertEqual(body["name"], "СК Ворон")
         self.assertEqual(body["address"], "П. Галушина 21 к.1")
         self.assertEqual(body["area_sqm"], "200.00")
-        self.assertEqual(body["contract"]["monthly_amount"], "5000.00")
+        self.assertEqual(body["contract"]["price"], "5000.00")
         log = output.getvalue()
         self.assertEqual(json.loads(log)["event"], "object_created")
         self.assertNotIn("Галушина", log)
@@ -217,10 +227,17 @@ class ObjectApiTest(unittest.TestCase):
         created = self.client.post("/api/objects", json=self._gym_payload()).json()
         updated = self.client.patch(
             f"/api/objects/{created['id']}",
-            json={"contract": {"number": "17/08", "monthly_amount": "6000.00"}},
+            json={
+                "contract": {
+                    "number": "17/08",
+                    "price": "6000.00",
+                    "periodicity": "monthly",
+                    "service_months": [],
+                }
+            },
         )
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["contract"]["monthly_amount"], "6000.00")
+        self.assertEqual(updated.json()["contract"]["price"], "6000.00")
 
         detached = self.client.patch(
             f"/api/objects/{created['id']}", json={"contract": None}
@@ -336,25 +353,17 @@ class SqliteForeignKeyTest(unittest.TestCase):
             with patch.dict(os.environ, {"DATABASE_URL": database_url}, clear=False):
                 command.upgrade(config, "c7d4e8f1a205")
                 engine = main.create_app_engine(database_url)
-                with Session(engine) as session:
-                    service_object = Object(
-                        name="Заполненный объект",
-                        address="Бизнес-адрес",
-                        type="office",
-                        area_sqm=Decimal("10.00"),
-                        risk_points=[],
-                        status="active",
+                with engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        "INSERT INTO objects "
+                        "(id, name, address, type, area_sqm, risk_points, status) "
+                        "VALUES (1, 'Заполненный объект', 'Бизнес-адрес', "
+                        "'office', 10, '[]', 'active')"
                     )
-                    session.add(service_object)
-                    session.flush()
-                    session.add(
-                        Client(
-                            name="Артём",
-                            phone=None,
-                            object_id=service_object.id,
-                        )
+                    connection.exec_driver_sql(
+                        "INSERT INTO clients (name, phone, object_id) "
+                        "VALUES ('Артём', NULL, 1)"
                     )
-                    session.commit()
                 engine.dispose()
                 command.upgrade(config, "head")
 

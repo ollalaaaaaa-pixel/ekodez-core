@@ -28,7 +28,15 @@ class PiiEncryptionUnavailable(ValueError):
 
 class ContractIn(BaseModel):
     number: str = Field(min_length=1, max_length=100)
-    monthly_amount: Decimal = Field(ge=0)
+    price: Decimal = Field(gt=0)
+    contract_date: date | None = None
+    periodicity: Literal["monthly", "semiannual", "custom"]
+    service_months: list[int] = Field(default_factory=list)
+    payment_term_business_days: int = Field(default=5, gt=0)
+    default_ksp: int = Field(default=5, ge=0)
+    default_derat_glue: int = Field(default=5, ge=0)
+    default_baits: int = Field(default=5, ge=0)
+    default_disinsection_glue: int = Field(default=6, ge=0)
     start_date: date | None = None
     end_date: date | None = None
 
@@ -40,11 +48,33 @@ class ContractIn(BaseModel):
             raise ValueError("contract number is required")
         return stripped
 
+    @model_validator(mode="after")
+    def validate_service_months(self) -> Self:
+        normalized = sorted(set(self.service_months))
+        if any(month < 1 or month > 12 for month in normalized):
+            raise ValueError("service months must be between 1 and 12")
+        if self.periodicity == "monthly" and normalized:
+            raise ValueError("monthly contracts do not use service months")
+        if self.periodicity == "semiannual" and len(normalized) != 2:
+            raise ValueError("semiannual contracts require exactly two months")
+        if self.periodicity == "custom" and not normalized:
+            raise ValueError("custom contracts require service months")
+        self.service_months = normalized
+        return self
+
 
 class ContractOut(BaseModel):
     id: int
     number: str
-    monthly_amount: str
+    price: str
+    contract_date: date | None
+    periodicity: Literal["monthly", "semiannual", "custom"] | None
+    service_months: list[int]
+    payment_term_business_days: int
+    default_ksp: int
+    default_derat_glue: int
+    default_baits: int
+    default_disinsection_glue: int
     start_date: date | None
     end_date: date | None
 
@@ -166,7 +196,15 @@ def serialize_contract(row: Contract | None) -> ContractOut | None:
     return ContractOut(
         id=row.id,
         number=row.number,
-        monthly_amount=decimal_string(row.monthly_amount),
+        price=decimal_string(row.price),
+        contract_date=row.contract_date,
+        periodicity=row.periodicity,  # type: ignore[arg-type]
+        service_months=row.service_months or [],
+        payment_term_business_days=row.payment_term_business_days,
+        default_ksp=row.default_ksp,
+        default_derat_glue=row.default_derat_glue,
+        default_baits=row.default_baits,
+        default_disinsection_glue=row.default_disinsection_glue,
         start_date=row.start_date,
         end_date=row.end_date,
     )

@@ -41,4 +41,18 @@ body {
   .app-content {
     margin: 12px;
   }
+
+  .contract-package-form .ant-form-item {
+    margin-bottom: 12px;
+  }
+
+  .ant-drawer-content-wrapper {
+    width: 100% !important;
+    max-width: 100vw;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
 }

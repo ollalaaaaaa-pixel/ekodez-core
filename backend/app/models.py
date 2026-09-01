@@ -75,14 +75,40 @@ class ExpenseCategory(Base):
 
 class Contract(Base):
     __tablename__ = "contracts"
+    __table_args__ = (
+        CheckConstraint(
+            "periodicity IS NULL OR periodicity IN ('monthly', 'semiannual', 'custom')",
+            name="ck_contracts_periodicity",
+        ),
+        CheckConstraint(
+            "payment_term_business_days > 0",
+            name="ck_contracts_payment_term_positive",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     number: Mapped[str] = mapped_column(String(100), unique=True)
-    monthly_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    contract_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    periodicity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    service_months: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    payment_term_business_days: Mapped[int] = mapped_column(default=5)
+    default_ksp: Mapped[int] = mapped_column(default=5)
+    default_derat_glue: Mapped[int] = mapped_column(default=5)
+    default_baits: Mapped[int] = mapped_column(default=5)
+    default_disinsection_glue: Mapped[int] = mapped_column(default=6)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    object: Mapped["Object | None"] = relationship(back_populates="contract")
+    inspection_reports: Mapped[list["InspectionReport"]] = relationship(
+        back_populates="contract", cascade="all, delete-orphan"
+    )
+    periods: Mapped[list["ContractPeriod"]] = relationship(
+        back_populates="contract", cascade="all, delete-orphan"
     )
 
 
@@ -117,7 +143,7 @@ class Object(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    contract: Mapped[Contract | None] = relationship()
+    contract: Mapped[Contract | None] = relationship(back_populates="object")
     clients: Mapped[list["Client"]] = relationship(back_populates="object")
     treatments: Mapped[list["Treatment"]] = relationship(back_populates="object")
 
@@ -228,12 +254,113 @@ class Client(Base):
     name: Mapped[str] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     encrypted_pii: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    representative: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    representative_role: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    inn_masked: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    kpp_masked: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    registration_number_masked: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    legal_address_masked: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    bank_details_masked: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_requisites: Mapped[str | None] = mapped_column(Text, nullable=True)
     object_id: Mapped[int] = mapped_column(ForeignKey("objects.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     object: Mapped[Object] = relationship(back_populates="clients")
+
+
+class InspectionReport(Base):
+    __tablename__ = "inspection_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "contract_id", "report_month", name="uq_inspection_contract_month"
+        ),
+        CheckConstraint(
+            "deratization_result IN ('not_required', 'required')",
+            name="ck_inspection_deratization_result",
+        ),
+        CheckConstraint(
+            "disinsection_result IN ('not_required', 'required')",
+            name="ck_inspection_disinsection_result",
+        ),
+        CheckConstraint("status IN ('draft', 'signed')", name="ck_inspection_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_id: Mapped[int] = mapped_column(
+        ForeignKey("contracts.id", ondelete="CASCADE"), index=True
+    )
+    report_month: Mapped[date] = mapped_column(Date)
+    inspection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    control_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ksp_count: Mapped[int] = mapped_column(default=5)
+    derat_glue_count: Mapped[int] = mapped_column(default=5)
+    bait_count: Mapped[int] = mapped_column(default=5)
+    rodents_caught: Mapped[int] = mapped_column(default=0)
+    deratization_result: Mapped[str] = mapped_column(String(20), default="not_required")
+    disinsection_glue_count: Mapped[int] = mapped_column(default=6)
+    insects_caught: Mapped[int] = mapped_column(default=0)
+    disinsection_result: Mapped[str] = mapped_column(String(20), default="not_required")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    signed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    contract: Mapped[Contract] = relationship(back_populates="inspection_reports")
+
+
+class ContractPeriod(Base):
+    __tablename__ = "contract_periods"
+    __table_args__ = (
+        UniqueConstraint(
+            "contract_id", "period_month", name="uq_contract_period_month"
+        ),
+        CheckConstraint(
+            "work_act_status IN ('draft', 'signed')",
+            name="ck_contract_period_work_act_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_id: Mapped[int] = mapped_column(
+        ForeignKey("contracts.id", ondelete="CASCADE"), index=True
+    )
+    period_month: Mapped[date] = mapped_column(Date)
+    paid_service_due: Mapped[bool] = mapped_column(Boolean)
+    price_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    preparations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    infestation_degree: Mapped[str] = mapped_column(String(100), default="начальная")
+    extra_services: Mapped[list[str]] = mapped_column(JSON, default=list)
+    invoice_number: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, unique=True
+    )
+    invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    work_act_status: Mapped[str] = mapped_column(String(20), default="draft")
+    work_act_signed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transactions.id"), nullable=True, unique=True
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    file_manifest: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    contract: Mapped[Contract] = relationship(back_populates="periods")
+    transaction: Mapped[Transaction | None] = relationship()
 
 
 class Treatment(Base):
