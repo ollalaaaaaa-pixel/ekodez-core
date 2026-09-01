@@ -979,7 +979,13 @@ def get_contract_timeline(object_id: int) -> list[dict[str, object]]:
                 {
                     "date": (row.generated_at or row.created_at).isoformat(),
                     "type": (
-                        "payment_linked" if row.transaction_id else "period_created"
+                        "payment_linked"
+                        if row.transaction_id
+                        else (
+                            "work_act_signed"
+                            if row.work_act_status == "signed"
+                            else "period_created"
+                        )
                     ),
                     "month": row.period_month.isoformat(),
                 }

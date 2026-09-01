@@ -186,7 +186,9 @@ export default function ContractPanel({
       disinsection_glue_count: object.contract.default_disinsection_glue,
       insects_caught: 0,
       disinsection_result: 'not_required',
+      inspection_status: 'draft',
       infestation_degree: 'начальная',
+      work_act_status: 'draft',
       invoice_date: today,
     })
     const response = await fetch(`${API}/api/transactions`)
@@ -219,6 +221,9 @@ export default function ContractPanel({
           disinsection_glue_count: Number(values.disinsection_glue_count),
           insects_caught: Number(values.insects_caught),
           disinsection_result: values.disinsection_result,
+          status: values.inspection_status,
+          signed_at:
+            values.inspection_status === 'signed' ? new Date().toISOString() : null,
         }),
       },
     )
@@ -237,6 +242,9 @@ export default function ContractPanel({
             .filter(Boolean),
           invoice_number: values.invoice_number || undefined,
           invoice_date: values.invoice_date || null,
+          work_act_status: values.work_act_status,
+          work_act_signed_at:
+            values.work_act_status === 'signed' ? new Date().toISOString() : null,
           transaction_id: values.transaction_id || null,
         }),
       },
@@ -360,11 +368,13 @@ export default function ContractPanel({
           <Form.Item name="disinsection_glue_count" label="КЛ дезинсекция"><Input type="number" min={0} /></Form.Item>
           <Form.Item name="insects_caught" label="Отловлено насекомых"><Input type="number" min={0} /></Form.Item>
           <Form.Item name="disinsection_result" label="Результат дезинсекции"><Select options={[{ value: 'not_required', label: 'Не требуется' }, { value: 'required', label: 'Требуется и выполнена' }]} /></Form.Item>
+          <Form.Item name="inspection_status" label="Статус акта осмотра"><Select options={[{ value: 'draft', label: 'Черновик' }, { value: 'signed', label: 'Подписан' }]} /></Form.Item>
           <Form.Item name="preparations" label="Препараты"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="infestation_degree" label="Степень заражения"><Input /></Form.Item>
           <Form.Item name="extra_services" label="Дополнительные услуги"><Input placeholder="Через запятую" /></Form.Item>
           <Form.Item name="invoice_number" label="Номер счёта"><Input placeholder="Система предложит следующий номер" /></Form.Item>
           <Form.Item name="invoice_date" label="Дата счёта"><Input type="date" /></Form.Item>
+          <Form.Item name="work_act_status" label="Статус акта выполненных работ"><Select options={[{ value: 'draft', label: 'Черновик' }, { value: 'signed', label: 'Подписан' }]} /></Form.Item>
           <Form.Item name="transaction_id" label="Привязать оплату"><Select allowClear options={transactions.map((row) => ({ value: row.id, label: `${row.operation_date} · ${row.amount} ₽ · ${row.description ?? 'без комментария'}` }))} /></Form.Item>
         </Form>
         {period?.file_manifest?.length ? (

@@ -139,6 +139,8 @@ describe('Objects screen', () => {
     expect(screen.getByLabelText('Дополнительные услуги')).toBeTruthy()
     expect(screen.getByLabelText('Номер счёта')).toBeTruthy()
     expect(screen.getByLabelText('Привязать оплату')).toBeTruthy()
+    expect(screen.getByLabelText('Статус акта осмотра')).toBeTruthy()
+    expect(screen.getByLabelText('Статус акта выполненных работ')).toBeTruthy()
   })
 
   test('does not mix treatment history when cards are opened quickly', async () => {

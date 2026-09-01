@@ -189,6 +189,18 @@ class ContractsAndActsApiTest(unittest.TestCase):
         )
         self.assertEqual(edited.status_code, 200, edited.text)
         self.assertEqual(edited.json()["invoice_number"], "77-А")
+        signed = self.client.patch(
+            f"/api/contract-periods/{period.json()['id']}",
+            json={
+                "work_act_status": "signed",
+                "work_act_signed_at": "2026-09-30T12:00:00+03:00",
+            },
+        )
+        self.assertEqual(signed.status_code, 200, signed.text)
+        timeline = self.client.get(
+            f"/api/objects/{self.object_id}/contract-timeline"
+        ).json()
+        self.assertIn("work_act_signed", {item["type"] for item in timeline})
 
         with Session(self.engine) as session:
             session.add(
