@@ -76,8 +76,15 @@ export default function LeadsPage() {
 
   const setStatus = (id: number, status: string) => {
     const lead = rows.find((row) => row.id === id)
-    if (status === 'done' && lead?.amount === '0.00') {
-      message.info('Укажите сумму в заявке — автодоход не будет создан')
+    if (status === 'done' && lead) {
+      if (Number(lead.amount) <= 0) {
+        message.info('Укажите сумму в заявке — автодоход не будет создан')
+        return
+      }
+      if (!lead.execution_date) {
+        message.error('Укажите дату выполнения')
+        return
+      }
     }
     fetch(API + '/api/leads/' + id + '/status', {
       method: 'POST',
