@@ -1,7 +1,7 @@
 ﻿import { useEffect, useState } from 'react'
 import {
-  Button, Card, Col, Empty, InputNumber, Modal, Progress, Row, Segmented, Select, Space,
-  Spin, Statistic, Table, Tag, Typography, message,
+  Button, Card, Col, Empty, Form, Input, InputNumber, Modal, Progress, Row, Segmented,
+  Select, Space, Spin, Statistic, Table, Tag, Typography, message,
 } from 'antd'
 import {
   ArrowDownOutlined, ArrowUpOutlined, EyeOutlined, UploadOutlined,
@@ -9,6 +9,7 @@ import {
 import dayjs from 'dayjs'
 import { API } from './api'
 import BankImportDrawer from './BankImportDrawer'
+import { INCOME_CATEGORIES } from './dictionaries'
 import './FinancePage.css'
 
 type Tx = {
@@ -24,9 +25,22 @@ type Tx = {
   review_required: boolean
   object_id: number | null
   object_name: string | null
+  lead_id: number | null
 }
 
 type ObjectOption = { id: number; name: string }
+type ExpenseCategory = { id: number; name: string }
+type LinkedLead = {
+  id: number
+  client_name: string | null
+  phone: string | null
+  address: string | null
+  category: string | null
+  amount: string
+  execution_date: string | null
+  performed_by: string
+  status: string
+}
 
 type Summary = {
   income: string
@@ -78,7 +92,14 @@ export default function FinancePage() {
   const [linking, setLinking] = useState<Tx | null>(null)
   const [selectedObjectId, setSelectedObjectId] = useState<number | null>(null)
   const [linkSaving, setLinkSaving] = useState(false)
+  const [editing, setEditing] = useState<Tx | null>(null)
+  const [editSaving, setEditSaving] = useState(false)
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [linkedLead, setLinkedLead] = useState<LinkedLead | null>(null)
+  const [leadCardOpen, setLeadCardOpen] = useState(false)
+  const [leadLoading, setLeadLoading] = useState(false)
   const [error, setError] = useState('')
+  const [editForm] = Form.useForm()
 
   const load = () => {
     fetch(API + '/api/finance/summary')
@@ -162,6 +183,76 @@ export default function FinancePage() {
     }
   }
 
+  const openEdit = async (transaction: Tx) => {
+    setEditing(transaction)
+    editForm.setFieldsValue({
+      operation_date: transaction.operation_date,
+      category: transaction.category,
+      description: transaction.description,
+    })
+    if (transaction.kind === 'expense' && expenseCategories.length === 0) {
+      try {
+        const response = await fetch(`${API}/api/expense-categories`)
+        if (!response.ok) throw new Error('expense categories unavailable')
+        const categories = (await response.json()) as ExpenseCategory[]
+        setExpenseCategories(categories)
+      } catch {
+        message.error('Не удалось загрузить статьи расходов')
+      }
+    }
+  }
+
+  const saveEdit = async (values: {
+    operation_date: string
+    category?: string
+    description?: string
+  }) => {
+    if (!editing) return
+    setEditSaving(true)
+    try {
+      const payload = {
+        operation_date: values.operation_date,
+        ...(
+          editing.kind === 'income' || editing.kind === 'expense'
+            ? { category: values.category }
+            : {}
+        ),
+        description: values.description?.trim() || null,
+      }
+      const response = await fetch(`${API}/api/transactions/${editing.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) throw new Error('Не удалось обновить операцию')
+      const updated = (await response.json()) as Tx
+      setRows((current) => current.map((row) => row.id === updated.id ? updated : row))
+      setEditing(null)
+      setAnalyticsRefresh((value) => value + 1)
+      message.success('Операция обновлена')
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : 'Ошибка обновления')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const openLeadCard = async (leadId: number) => {
+    setLeadCardOpen(true)
+    setLeadLoading(true)
+    setLinkedLead(null)
+    try {
+      const response = await fetch(`${API}/api/leads/${leadId}`)
+      if (!response.ok) throw new Error('Не удалось открыть заявку')
+      setLinkedLead((await response.json()) as LinkedLead)
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : 'Ошибка загрузки заявки')
+      setLeadCardOpen(false)
+    } finally {
+      setLeadLoading(false)
+    }
+  }
+
   const columns = [
     { title: 'Дата', dataIndex: 'operation_date', key: 'date' },
     {
@@ -180,6 +271,13 @@ export default function FinancePage() {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {r.counterparty}
             </Typography.Text>
+          ) : null}
+          {r.lead_id !== null ? (
+            <div>
+              <Button type="link" size="small" onClick={() => void openLeadCard(r.lead_id!)}>
+                Заявка #{r.lead_id}
+              </Button>
+            </div>
           ) : null}
         </div>
       ),
@@ -223,6 +321,7 @@ export default function FinancePage() {
       key: 'actions',
       render: (_: unknown, r: Tx) => (
         <Space wrap>
+          <Button size="small" onClick={() => void openEdit(r)}>Редактировать</Button>
           {r.review_required ? (
             <>
             <InputNumber
@@ -383,6 +482,62 @@ export default function FinancePage() {
         <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
           Сопоставление выполняется только вручную. Описание и контрагент не используются.
         </Typography.Paragraph>
+      </Modal>
+      <Modal
+        title="Редактировать операцию"
+        open={editing !== null}
+        onCancel={() => setEditing(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical" onFinish={saveEdit}>
+          <Form.Item
+            name="operation_date"
+            label="Дата операции"
+            rules={[{ required: true }]}
+          >
+            <Input type="date" max={dayjs().format('YYYY-MM-DD')} />
+          </Form.Item>
+          {(editing?.kind === 'income' || editing?.kind === 'expense') && (
+            <Form.Item name="category" label="Категория" rules={[{ required: true }]}>
+              <Select
+                options={(editing.kind === 'expense'
+                  ? expenseCategories.map((item) => item.name)
+                  : INCOME_CATEGORIES
+                ).map((value) => ({ value, label: value }))}
+              />
+            </Form.Item>
+          )}
+          <Form.Item name="description" label="Комментарий">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={editSaving} block>
+            Сохранить операцию
+          </Button>
+        </Form>
+      </Modal>
+      <Modal
+        title={linkedLead ? `Заявка #${linkedLead.id}` : 'Заявка'}
+        open={leadCardOpen}
+        confirmLoading={leadLoading}
+        footer={[
+          <Button key="close" onClick={() => setLeadCardOpen(false)}>
+            Закрыть карточку заявки
+          </Button>,
+        ]}
+        onCancel={() => setLeadCardOpen(false)}
+      >
+        {linkedLead ? (
+          <Space direction="vertical">
+            <Typography.Text strong>{linkedLead.client_name || 'Клиент'}</Typography.Text>
+            <Typography.Text>{linkedLead.phone || 'Телефон не указан'}</Typography.Text>
+            <Typography.Text>{linkedLead.address || 'Адрес не указан'}</Typography.Text>
+            <Typography.Text>Услуга: {linkedLead.category || 'не указана'}</Typography.Text>
+            <Typography.Text>Дата: {linkedLead.execution_date || 'не назначена'}</Typography.Text>
+            <Typography.Text>Сумма: {linkedLead.amount} ₽</Typography.Text>
+            <Typography.Text>Исполнитель: {linkedLead.performed_by}</Typography.Text>
+          </Space>
+        ) : null}
       </Modal>
     </div>
   )

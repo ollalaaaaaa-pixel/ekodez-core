@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Modal } from 'antd'
+import { message, Modal } from 'antd'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import LeadsPage from './LeadsPage'
 
@@ -45,6 +45,7 @@ describe('Lead PII reveal', () => {
     })))
   })
   afterEach(() => {
+    message.destroy()
     cleanup()
     Modal.destroyAll()
     document.body.replaceChildren()
@@ -180,5 +181,40 @@ describe('Lead PII reveal', () => {
     expect(screen.getAllByText('8921***5000')).toHaveLength(2)
     expect(screen.getAllByRole('button', { name: 'Редактировать' })).toHaveLength(2)
     vi.useRealTimers()
+  })
+
+  test('does not send completion when amount is zero', async () => {
+    const infoSpy = vi.spyOn(message, 'info')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      jsonResponse([{ ...maskedLead, status: 'in_work', amount: '0.00' }]))
+    const user = userEvent.setup()
+    render(<LeadsPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Выполнена' }))
+
+    expect(infoSpy).toHaveBeenCalledWith('Укажите сумму в заявке — автодоход не будет создан')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).endsWith('/api/leads/1/status') && init?.method === 'POST')).toBe(false)
+  })
+
+  test('does not send completion when positive amount has no execution date', async () => {
+    const errorSpy = vi.spyOn(message, 'error')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      jsonResponse([{
+        ...maskedLead,
+        status: 'in_work',
+        amount: '5000.00',
+        execution_date: null,
+      }]))
+    const user = userEvent.setup()
+    render(<LeadsPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Выполнена' }))
+
+    expect(errorSpy).toHaveBeenCalledWith('Укажите дату выполнения')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).endsWith('/api/leads/1/status') && init?.method === 'POST')).toBe(false)
   })
 })

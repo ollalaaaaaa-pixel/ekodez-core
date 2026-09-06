@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -196,6 +196,21 @@ class ClassifyIn(BaseModel):
 
 class TransactionObjectIn(BaseModel):
     object_id: int | None
+
+
+class TransactionPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    operation_date: date | None = None
+    category: str | None = None
+    description: str | None = None
+
+    @field_validator("operation_date")
+    @classmethod
+    def reject_future_date(cls, value: date | None) -> date | None:
+        if value is not None and value > date.today():
+            raise ValueError("operation date cannot be in the future")
+        return value
 
 
 class DayEntryIn(BaseModel):
@@ -1403,6 +1418,46 @@ def classify_transaction(tx_id: int, payload: ClassifyIn):
         row.category = classify_finance(finance_text) or default_finance_category(
             payload.kind
         )
+        session.commit()
+        session.refresh(row)
+        return _transaction_out(session, row)
+
+
+@app.patch("/api/transactions/{tx_id}", response_model=TransactionOut)
+def update_transaction(tx_id: int, payload: TransactionPatchIn):
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "operation_date" in changes and changes["operation_date"] is None:
+        raise HTTPException(status_code=422, detail="operation date cannot be null")
+    if "category" in changes and changes["category"] is None:
+        raise HTTPException(status_code=422, detail="category cannot be null")
+
+    with Session(engine) as session:
+        row = session.get(Transaction, tx_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if "category" in changes:
+            category = changes["category"]
+            if row.kind == "income":
+                if category not in INCOME_CATEGORIES_V1:
+                    raise HTTPException(status_code=422, detail="bad income category")
+            elif row.kind == "expense":
+                expense_category = session.scalar(
+                    select(ExpenseCategory).where(
+                        ExpenseCategory.name == category,
+                        ExpenseCategory.is_active == True,
+                    )
+                )
+                if expense_category is None:
+                    raise HTTPException(status_code=422, detail="bad expense category")
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="classify transaction before editing category",
+                )
+        for field_name, value in changes.items():
+            setattr(row, field_name, value)
         session.commit()
         session.refresh(row)
         return _transaction_out(session, row)

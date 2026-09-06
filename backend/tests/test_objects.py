@@ -115,7 +115,7 @@ class ObjectApiTest(unittest.TestCase):
             },
             "risk_points": ["раздевалка", "подвал"],
             "last_treatment_date": "2026-08-01",
-            "next_treatment_date": "2026-09-01",
+            "next_treatment_date": (date.today() + timedelta(days=30)).isoformat(),
             "status": "active",
         }
 
