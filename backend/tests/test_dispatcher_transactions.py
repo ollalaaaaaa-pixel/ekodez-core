@@ -64,13 +64,14 @@ class DispatcherTransactionPatchTest(unittest.TestCase):
         self.assertEqual(response.json()["amount"], "5000.00")
         with Session(self.engine) as session:
             stored = session.get(Transaction, tx_id)
+            assert stored is not None
             self.assertEqual(stored.amount, Decimal("5000.00"))
 
     def test_patch_rejects_future_date_amount_empty_payload_and_unknown_row(self):
         tx_id = self._transaction()
         future = (date.today() + timedelta(days=1)).isoformat()
 
-        cases = (
+        cases: tuple[tuple[dict[str, str], int], ...] = (
             ({"operation_date": future}, 422),
             ({"amount": "1.00"}, 422),
             ({}, 422),
