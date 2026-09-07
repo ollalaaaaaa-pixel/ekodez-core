@@ -14,7 +14,7 @@ from app.security.pii import (
 )
 
 ObjectType = Literal[
-    "restaurant", "gym", "kindergarten", "apartment", "office", "other"
+    "restaurant", "gym", "kindergarten", "apartment", "office", "hostel", "other"
 ]
 StoredObjectStatus = Literal["active", "warranty", "inactive"]
 ObjectStatus = Literal["active", "warranty", "overdue", "inactive"]

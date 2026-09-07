@@ -120,7 +120,7 @@ class Object(Base):
     __table_args__ = (
         CheckConstraint(
             "type IN ('restaurant', 'gym', 'kindergarten', 'apartment', "
-            "'office', 'other')",
+            "'office', 'hostel', 'other')",
             name="ck_objects_type",
         ),
         CheckConstraint(

@@ -321,6 +321,18 @@ class ObjectApiTest(unittest.TestCase):
             self.client.post("/api/objects", json=bad_status).status_code, 422
         )
 
+    def test_hostel_type_is_accepted_and_filterable(self):
+        payload = self._gym_payload("Хостел ТЕСТ")
+        payload["type"] = "hostel"
+
+        created = self.client.post("/api/objects", json=payload)
+
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["type"], "hostel")
+        listed = self.client.get("/api/objects?type=hostel")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([row["id"] for row in listed.json()], [created.json()["id"]])
+
 
 class SqliteForeignKeyTest(unittest.TestCase):
     def test_invalid_object_reference_is_rejected(self):
