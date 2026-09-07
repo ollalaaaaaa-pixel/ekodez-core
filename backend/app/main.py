@@ -692,11 +692,27 @@ def get_object(
 
 
 @app.patch("/api/objects/{object_id}", response_model=ObjectOut)
-def update_object(object_id: int, payload: ObjectUpdate):
+def update_object(object_id: int, payload: ObjectUpdate, request: Request):
     with Session(engine) as session:
         row = session.get(Object, object_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        if payload.contract is not None:
+            old_contract = row.contract
+            money_changed = (
+                old_contract is None
+                or old_contract.price != payload.contract.price
+                or old_contract.inspection_price != payload.contract.inspection_price
+            )
+            client_host = request.client.host if request.client else ""
+            if money_changed and client_host not in ("127.0.0.1", "::1"):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Изменение денежных полей договора доступно только "
+                        "на компьютере владельца"
+                    ),
+                )
         changes = payload.model_dump(exclude_unset=True, exclude={"contract"})
         new_type = changes.get("type", row.type)
         new_address = changes.get("address")

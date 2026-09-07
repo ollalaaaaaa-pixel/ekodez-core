@@ -119,6 +119,44 @@ class ContractsAndActsApiTest(unittest.TestCase):
         self.assertEqual(contract["service_months"], [3, 9])
         self.assertNotIn("monthly_amount", contract)
 
+    def test_contract_money_edits_from_lan_are_forbidden_and_proxy_is_ignored(self):
+        contract = self._create_contract()
+        payload = {key: value for key, value in contract.items() if key != "id"}
+        payload["price"] = "6000.00"
+        payload["inspection_price"] = "3500.00"
+
+        remote = TestClient(main.app, client=("192.168.1.20", 51000))
+        response = remote.patch(
+            f"/api/objects/{self.object_id}",
+            json={"contract": payload},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        remote.close()
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Изменение денежных полей договора доступно только "
+            "на компьютере владельца",
+        )
+        stored = self.client.get(f"/api/objects/{self.object_id}").json()["contract"]
+        self.assertEqual(stored["price"], "5000.00")
+        self.assertEqual(stored["inspection_price"], "3000.00")
+
+    def test_contract_money_edits_from_localhost_are_allowed(self):
+        contract = self._create_contract()
+        payload = {key: value for key, value in contract.items() if key != "id"}
+        payload["price"] = "6000.00"
+        payload["inspection_price"] = "3500.00"
+
+        response = self.client.patch(
+            f"/api/objects/{self.object_id}", json={"contract": payload}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["contract"]["price"], "6000.00")
+        self.assertEqual(response.json()["contract"]["inspection_price"], "3500.00")
+
     def test_billing_requisites_are_masked_and_local_reveal_is_audited(self):
         payload = {
             "client_type": "legal_entity",
