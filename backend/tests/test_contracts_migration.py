@@ -50,7 +50,7 @@ class ContractsAndActsMigrationTest(unittest.TestCase):
                             "SELECT price, contract_date, periodicity, service_months, "
                             "payment_term_business_days, default_ksp, "
                             "default_derat_glue, default_baits, "
-                            "default_disinsection_glue "
+                            "default_disinsection_glue, inspection_price "
                             "FROM contracts WHERE id = 1"
                         )
                     ).one()
@@ -63,6 +63,7 @@ class ContractsAndActsMigrationTest(unittest.TestCase):
                     self.assertEqual(contract.default_derat_glue, 5)
                     self.assertEqual(contract.default_baits, 5)
                     self.assertEqual(contract.default_disinsection_glue, 6)
+                    self.assertIsNone(contract.inspection_price)
 
                     tables = {
                         row[0]
@@ -91,8 +92,23 @@ class ContractsAndActsMigrationTest(unittest.TestCase):
                         )
                     }
                     self.assertTrue(
-                        {"preparations", "infestation_degree", "extra_services"}
+                        {
+                            "preparations",
+                            "infestation_degree",
+                            "extra_services",
+                            "treatment_invoice_number",
+                            "treatment_price_snapshot",
+                        }
                         <= period_columns
+                    )
+                    indexes = {
+                        row[1]
+                        for row in connection.execute(
+                            text("PRAGMA index_list('contract_periods')")
+                        )
+                    }
+                    self.assertIn(
+                        "uq_contract_periods_treatment_invoice_number", indexes
                     )
             finally:
                 verified.dispose()

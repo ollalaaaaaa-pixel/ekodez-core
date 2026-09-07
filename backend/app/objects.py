@@ -29,6 +29,7 @@ class PiiEncryptionUnavailable(ValueError):
 class ContractIn(BaseModel):
     number: str = Field(min_length=1, max_length=100)
     price: Decimal = Field(gt=0)
+    inspection_price: Decimal | None = Field(default=None, gt=0)
     contract_date: date | None = None
     periodicity: Literal["monthly", "semiannual", "custom"]
     service_months: list[int] = Field(default_factory=list)
@@ -67,6 +68,7 @@ class ContractOut(BaseModel):
     id: int
     number: str
     price: str
+    inspection_price: str | None
     contract_date: date | None
     periodicity: Literal["monthly", "semiannual", "custom"] | None
     service_months: list[int]
@@ -197,6 +199,11 @@ def serialize_contract(row: Contract | None) -> ContractOut | None:
         id=row.id,
         number=row.number,
         price=decimal_string(row.price),
+        inspection_price=(
+            decimal_string(row.inspection_price)
+            if row.inspection_price is not None
+            else None
+        ),
         contract_date=row.contract_date,
         periodicity=row.periodicity,  # type: ignore[arg-type]
         service_months=row.service_months or [],

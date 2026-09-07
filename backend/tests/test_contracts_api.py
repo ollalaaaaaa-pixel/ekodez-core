@@ -61,6 +61,7 @@ class ContractsAndActsApiTest(unittest.TestCase):
                     "number": "ТЕСТ-01/09/26",
                     "contract_date": "2026-09-01",
                     "price": "5000.00",
+                    "inspection_price": "3000.00",
                     "periodicity": "semiannual",
                     "service_months": [3, 9],
                 }
@@ -114,6 +115,7 @@ class ContractsAndActsApiTest(unittest.TestCase):
 
         contract = self._create_contract()
         self.assertEqual(contract["price"], "5000.00")
+        self.assertEqual(contract["inspection_price"], "3000.00")
         self.assertEqual(contract["service_months"], [3, 9])
         self.assertNotIn("monthly_amount", contract)
 
@@ -294,6 +296,15 @@ class ContractsAndActsApiTest(unittest.TestCase):
             self.assertEqual(downloaded.status_code, 200)
             self.assertGreater(len(downloaded.content), 0)
             self.assertEqual(remote_download.status_code, 403)
+            with (
+                patch.object(main, "DOCUMENT_OUTPUT_ROOT", Path(temp_dir) / "out"),
+                patch.object(main, "DOCUMENT_PROFILE_PATH", profile_path),
+            ):
+                regenerated = self.client.post(
+                    f"/api/contract-periods/{period['id']}/generate"
+                )
+            self.assertEqual(regenerated.status_code, 200, regenerated.text)
+            self.assertEqual(regenerated.json()["file_manifest"][0]["version"], 2)
 
     def test_document_profile_is_encrypted_and_localhost_only(self):
         payload = {
@@ -316,6 +327,43 @@ class ContractsAndActsApiTest(unittest.TestCase):
             stored = profile_path.read_text(encoding="utf-8")
             self.assertNotIn("ТЕСТ банк", stored)
             self.assertNotIn("ТЕСТ ИНН", stored)
+
+    def test_auto_packages_trigger_is_local_and_idempotent(self):
+        self._create_contract()
+        self._save_billing_client()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "company-profile.json"
+            encrypted_profile = encrypt_sensitive_mapping(
+                {
+                    "EXECUTOR_BANK_DETAILS": "ТЕСТ банк",
+                    "EXECUTOR_INN": "ТЕСТ ИНН",
+                    "EXECUTOR_OGRNIP": "ТЕСТ ОГРНИП",
+                    "TAX_MODE": "НДС не облагается",
+                }
+            )
+            assert encrypted_profile is not None
+            profile_path.write_text(
+                json.dumps({"encrypted_profile": encrypted_profile}), encoding="utf-8"
+            )
+            with (
+                patch.object(main, "DOCUMENT_OUTPUT_ROOT", Path(temp_dir) / "out"),
+                patch.object(main, "DOCUMENT_PROFILE_PATH", profile_path),
+            ):
+                remote = TestClient(main.app, client=("192.168.1.20", 51000))
+                denied = remote.post("/api/contracts/auto-packages?month=2026-09")
+                remote.close()
+                first = self.client.post("/api/contracts/auto-packages?month=2026-09")
+                second = self.client.post("/api/contracts/auto-packages?month=2026-09")
+
+            self.assertEqual(denied.status_code, 403)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(first.json()["ready"], ["ТЕСТ Хостел"])
+            self.assertEqual(second.json()["ready"], [])
+            with Session(self.engine) as session:
+                period = session.scalar(select(ContractPeriod))
+                assert period is not None
+                self.assertEqual(period.price_snapshot, Decimal("3000.00"))
+                self.assertEqual(len(period.file_manifest), 2)
 
 
 if __name__ == "__main__":

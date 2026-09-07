@@ -16,6 +16,11 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.auto_contract_packages import (
+    AutoPackageDraft,
+    AutoPackageSummary,
+    run_auto_contract_packages,
+)
 from app.bank_import import (
     MONEY_QUANTUM,
     BankImportError,
@@ -49,6 +54,8 @@ from app.contracts import (
 from app.db import create_app_engine
 from app.document_packages import (
     DocumentTemplateError,
+    PackageDocument,
+    build_document_package,
     build_month_package,
     resolve_package_file,
 )
@@ -147,7 +154,7 @@ app.add_middleware(
 @app.on_event("startup")
 def _start_telegram_poller() -> None:
     start_poller(engine)
-    start_report_scheduler(engine)
+    start_report_scheduler(engine, _auto_package_documents)
 
 
 class TransactionIn(BaseModel):
@@ -460,6 +467,7 @@ def _contract_from_input(payload: ContractIn) -> Contract:
     return Contract(
         number=payload.number.strip(),
         price=payload.price,
+        inspection_price=payload.inspection_price,
         contract_date=payload.contract_date,
         periodicity=payload.periodicity,
         service_months=payload.service_months,
@@ -721,6 +729,7 @@ def update_object(object_id: int, payload: ObjectUpdate):
             else:
                 old_contract.number = payload.contract.number
                 old_contract.price = payload.contract.price
+                old_contract.inspection_price = payload.contract.inspection_price
                 old_contract.contract_date = payload.contract.contract_date
                 old_contract.periodicity = payload.contract.periodicity
                 old_contract.service_months = payload.contract.service_months
@@ -1105,15 +1114,15 @@ def _package_values(
     period: ContractPeriod,
     client_values: dict[str, str | None],
 ) -> dict[str, str]:
-    if report.inspection_date is None:
-        raise DocumentTemplateError("inspection date is required")
     if period.paid_service_due and period.invoice_date is None:
         raise DocumentTemplateError("invoice date is required")
     if period.paid_service_due and not period.invoice_number:
         raise DocumentTemplateError("invoice number is required")
     price = period.price_snapshot or contract.price
     price_text = f"{Decimal(price):.2f}"
-    inspection_date = report.control_date or report.inspection_date
+    inspection_date = (
+        report.control_date or report.inspection_date or period.period_month
+    )
     recommendations = []
     if period.preparations:
         recommendations.append(f"Применённые препараты: {period.preparations}")
@@ -1204,6 +1213,106 @@ def _package_values(
     }
     values.update(profile)
     return values
+
+
+def _auto_package_documents(draft: AutoPackageDraft) -> list[dict[str, object]]:
+    service_object = draft.contract.object
+    if service_object is None:
+        raise DocumentTemplateError("contract has no object")
+    client_values = decrypt_sensitive_mapping(draft.client.encrypted_requisites)
+    inspection_values = _package_values(
+        service_object,
+        draft.contract,
+        draft.report,
+        draft.period,
+        client_values,
+    )
+    inspection_values.update(
+        {
+            "SERVICE_1": "Контрольное обследование",
+            "SERVICE_NAME": "Контрольное обследование",
+        }
+    )
+    documents = [
+        PackageDocument("inspection", "Акт_осмотра.docx", inspection_values),
+        PackageDocument("invoice", "Счёт_обследование.docx", inspection_values),
+    ]
+    if draft.treatment is not None:
+        treatment_values = dict(inspection_values)
+        treatment_price = draft.period.treatment_price_snapshot or draft.contract.price
+        treatment_price_text = f"{Decimal(treatment_price):.2f}"
+        treatment_number = draft.period.treatment_invoice_number or ""
+        treatment_values.update(
+            {
+                "ACT_NUM": treatment_number,
+                "INVOICE_NUM": treatment_number,
+                "LINE_TOTAL_1": treatment_price_text,
+                "PRICE": treatment_price_text,
+                "SERVICE_1": "Обработка по договору санитарного обслуживания",
+                "SERVICE_NAME": "Обработка по договору санитарного обслуживания",
+                "TOTAL": treatment_price_text,
+                "TOTAL_WORDS": f"{treatment_price_text} рублей",
+                "UNIT_PRICE_1": treatment_price_text,
+            }
+        )
+        documents.extend(
+            (
+                PackageDocument(
+                    "work_act", "Акт_выполненных_работ.docx", treatment_values
+                ),
+                PackageDocument("invoice", "Счёт_обработка.docx", treatment_values),
+            )
+        )
+    manifest = build_document_package(
+        template_dir=DOCUMENT_TEMPLATE_DIR,
+        output_root=DOCUMENT_OUTPUT_ROOT,
+        object_name=service_object.name,
+        period_month=draft.period.period_month,
+        documents=tuple(documents),
+    )
+    return [
+        {
+            "version": manifest.version,
+            "kind": item.kind,
+            "name": item.name,
+            "size": item.size,
+            "sha256": item.sha256,
+        }
+        for item in manifest.files
+    ]
+
+
+def _safe_auto_summary(summary: AutoPackageSummary) -> dict[str, object]:
+    return {
+        "month": summary.period_month.strftime("%Y-%m"),
+        "ready": list(summary.ready),
+        "skipped": [
+            {"object": row.label, "reasons": list(row.reasons)}
+            for row in summary.skipped
+        ],
+    }
+
+
+@app.post("/api/contracts/auto-packages")
+def generate_auto_contract_packages(month: str, request: Request) -> dict[str, object]:
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(
+            status_code=403, detail="automatic document generation is localhost only"
+        )
+    try:
+        period_month = parse_month(month)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with Session(engine) as session:
+        try:
+            summary = run_auto_contract_packages(
+                session, period_month, _auto_package_documents
+            )
+        except (ValueError, DocumentTemplateError) as error:
+            session.rollback()
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return _safe_auto_summary(summary)
 
 
 @app.post(

@@ -11,6 +11,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
+from app.auto_contract_packages import (
+    DocumentGenerator,
+    format_auto_package_summary,
+    run_scheduled_auto_contract_packages,
+)
 from app.business_calendar import CalendarRangeError, add_business_days
 from app.inventory import LOW_STOCK_RATIO
 from app.master_workflow import list_due_leads
@@ -436,6 +441,7 @@ def _send_daily_report_locked(
     now: datetime,
     sender: RecipientSender = send_message,
     card_sender: CardSender = _send_message,
+    auto_package_generator: DocumentGenerator | None = None,
 ) -> SentReport:
     if report_type not in ("auto", "manual"):
         raise ValueError("unsupported report type")
@@ -473,12 +479,22 @@ def _send_daily_report_locked(
                     remaining = math.ceil(MANUAL_COOLDOWN_SECONDS - elapsed)
                     raise ManualReportCooldown(max(1, remaining))
 
+        auto_package_summary = None
+        if auto_package_generator is not None:
+            auto_package_summary = run_scheduled_auto_contract_packages(
+                session, send_date, auto_package_generator
+            )
         snapshot = build_daily_snapshot(session, send_date - timedelta(days=1))
         contract_reminders = build_contract_reminders(session, send_date)
         message = "\n".join(
             [
                 format_daily_report(snapshot),
                 format_contract_reminders(contract_reminders),
+                (
+                    format_auto_package_summary(auto_package_summary)
+                    if auto_package_summary is not None
+                    else ""
+                ),
                 *format_due_leads_section(session, send_date, reveal_pii=True),
             ]
         )
@@ -513,8 +529,16 @@ def send_daily_report(
     now: datetime,
     sender: RecipientSender = send_message,
     card_sender: CardSender = _send_message,
+    auto_package_generator: DocumentGenerator | None = None,
 ) -> SentReport:
     # В утверждённом локальном deployment один backend-процесс. Блокировка
     # сериализует HTTP-запросы и scheduler для auto-idempotency и cooldown.
     with _delivery_lock:
-        return _send_daily_report_locked(engine, report_type, now, sender, card_sender)
+        return _send_daily_report_locked(
+            engine,
+            report_type,
+            now,
+            sender,
+            card_sender,
+            auto_package_generator,
+        )

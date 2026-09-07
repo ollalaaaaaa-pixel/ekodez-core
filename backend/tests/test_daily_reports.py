@@ -614,32 +614,32 @@ class DailySchedulerTest(unittest.TestCase):
         from app.reports.scheduler import next_check_at, within_catchup_window
 
         day = date(2026, 8, 26)
-        before = datetime(2026, 8, 26, 8, 59, tzinfo=MOSCOW_TZ)
+        before = datetime(2026, 8, 26, 9, 9, tzinfo=MOSCOW_TZ)
         self.assertFalse(within_catchup_window(before))
         self.assertEqual(
             next_check_at(before),
             datetime.combine(day, datetime.min.time()).replace(
-                hour=9, tzinfo=MOSCOW_TZ
+                hour=9, minute=10, tzinfo=MOSCOW_TZ
             ),
         )
         self.assertTrue(
-            within_catchup_window(datetime(2026, 8, 26, 9, 0, tzinfo=MOSCOW_TZ))
+            within_catchup_window(datetime(2026, 8, 26, 9, 10, tzinfo=MOSCOW_TZ))
         )
         middle = datetime(2026, 8, 26, 10, 37, tzinfo=MOSCOW_TZ)
         self.assertTrue(within_catchup_window(middle))
         self.assertEqual(
             next_check_at(middle),
-            datetime(2026, 8, 26, 11, 0, tzinfo=MOSCOW_TZ),
+            datetime(2026, 8, 26, 11, 10, tzinfo=MOSCOW_TZ),
         )
-        end = datetime(2026, 8, 26, 12, 0, tzinfo=MOSCOW_TZ)
+        end = datetime(2026, 8, 26, 12, 10, tzinfo=MOSCOW_TZ)
         self.assertTrue(within_catchup_window(end))
-        delayed_final_check = datetime(2026, 8, 26, 12, 0, 1, tzinfo=MOSCOW_TZ)
+        delayed_final_check = datetime(2026, 8, 26, 13, 9, 59, tzinfo=MOSCOW_TZ)
         self.assertTrue(within_catchup_window(delayed_final_check))
-        after = datetime(2026, 8, 26, 13, 0, tzinfo=MOSCOW_TZ)
+        after = datetime(2026, 8, 26, 13, 10, tzinfo=MOSCOW_TZ)
         self.assertFalse(within_catchup_window(after))
         self.assertEqual(
             next_check_at(after),
-            datetime(2026, 8, 27, 9, 0, tzinfo=MOSCOW_TZ),
+            datetime(2026, 8, 27, 9, 10, tzinfo=MOSCOW_TZ),
         )
 
     def test_due_auto_calls_service_directly_and_skips_success(self):

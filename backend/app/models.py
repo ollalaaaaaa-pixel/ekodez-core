@@ -89,6 +89,9 @@ class Contract(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     number: Mapped[str] = mapped_column(String(100), unique=True)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    inspection_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
     contract_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     periodicity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     service_months: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
@@ -342,6 +345,12 @@ class ContractPeriod(Base):
     extra_services: Mapped[list[str]] = mapped_column(JSON, default=list)
     invoice_number: Mapped[str | None] = mapped_column(
         String(100), nullable=True, unique=True
+    )
+    treatment_invoice_number: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, unique=True
+    )
+    treatment_price_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
     )
     invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     work_act_status: Mapped[str] = mapped_column(String(20), default="draft")
