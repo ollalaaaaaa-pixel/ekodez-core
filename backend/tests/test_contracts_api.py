@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -118,6 +119,28 @@ class ContractsAndActsApiTest(unittest.TestCase):
         self.assertEqual(contract["inspection_price"], "3000.00")
         self.assertEqual(contract["service_months"], [3, 9])
         self.assertNotIn("monthly_amount", contract)
+
+    def test_client_representation_uses_document_wording(self):
+        self.assertEqual(
+            main._client_representation(
+                {
+                    "client_type": "sole_proprietor",
+                    "name": "ИП Шумилова Инга Владимировна",
+                }
+            ),
+            "ИП Шумилова Инга Владимировна",
+        )
+        self.assertEqual(
+            main._client_representation(
+                {
+                    "client_type": "legal_entity",
+                    "name": "ООО «ТЕСТ Хостел»",
+                    "representative": "Кузнецова Ольга Викторовна",
+                    "representative_role": "генеральный директор",
+                }
+            ),
+            "ООО «ТЕСТ Хостел» в лице генерального директора Кузнецовой О.В.",
+        )
 
     def test_contract_money_edits_from_lan_are_forbidden_and_proxy_is_ignored(self):
         contract = self._create_contract()
@@ -318,6 +341,28 @@ class ContractsAndActsApiTest(unittest.TestCase):
             self.assertEqual(len(generated.json()["file_manifest"]), 3)
             self.assertEqual(generated.json()["file_manifest"][0]["version"], 1)
             self.assertNotIn(str(Path(temp_dir)), generated.text)
+            package_dir = Path(temp_dir) / "out" / "2026-09" / "ТЕСТ Хостел" / "v1"
+            package_text = "\n".join(
+                paragraph.text
+                for file_path in package_dir.glob("*.docx")
+                for paragraph in Document(str(file_path)).paragraphs
+            )
+            self.assertIn("НДС не облагается (УСН)", package_text)
+            self.assertNotIn("БЕЗ НДС", package_text)
+            self.assertNotIn("Претензий нет..", package_text)
+            for file_name in ("Акт_выполненных_работ.docx", "Счёт.docx"):
+                document = Document(str(package_dir / file_name))
+                total_row = next(
+                    row
+                    for table in document.tables
+                    for row in table.rows
+                    if row.cells[0].text.strip().startswith("Итого")
+                )
+                self.assertEqual(total_row.cells[0].text.strip(), "Итого")
+                self.assertTrue(
+                    all(not cell.text.strip() for cell in total_row.cells[1:-1])
+                )
+                self.assertEqual(total_row.cells[-1].text.strip(), "5000.00")
             first_name = generated.json()["file_manifest"][0]["name"]
             with (
                 patch.object(main, "DOCUMENT_OUTPUT_ROOT", Path(temp_dir) / "out"),
