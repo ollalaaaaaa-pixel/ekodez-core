@@ -110,22 +110,21 @@ def run_auto_contract_packages(
             if service_object is not None
             else f"Договор {contract.number}"
         )
+        reasons: list[str] = []
         client = None
         if service_object is not None:
             if service_object.status == "inactive":
                 continue
             client = session.scalar(
                 select(Client)
-                .where(
-                    Client.object_id == service_object.id,
-                    Client.client_type == "legal_entity",
-                )
+                .where(Client.object_id == service_object.id)
                 .order_by(Client.id)
                 .limit(1)
             )
             if client is None:
                 continue
-        reasons: list[str] = []
+            if client.client_type not in ("legal_entity", "sole_proprietor"):
+                reasons.append("тип плательщика не поддерживается")
         if service_object is None:
             reasons.append("нет объекта")
         if contract.periodicity is None:

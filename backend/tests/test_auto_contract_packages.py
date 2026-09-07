@@ -163,7 +163,14 @@ class AutoContractPackagesTest(unittest.TestCase):
             )
             labels = {row.label for row in result.skipped}
             self.assertNotIn("Объект inactive-без-цены", labels)
-            self.assertNotIn("Объект физлицо-без-цены", labels)
+            reasons = {row.label: row.reasons for row in result.skipped}
+            self.assertEqual(
+                reasons["Объект физлицо-без-цены"],
+                (
+                    "тип плательщика не поддерживается",
+                    "не задана цена обследования",
+                ),
+            )
 
     def test_reasons_are_aggregated_and_existing_rows_are_silent(self):
         with Session(self.engine) as session:
@@ -208,7 +215,7 @@ class AutoContractPackagesTest(unittest.TestCase):
             self.assertNotIn("Объект есть-период", reasons)
             self.assertEqual(not_configured.inspection_reports, [])
 
-    def test_monthly_and_service_months_and_legal_entities_only(self):
+    def test_monthly_and_service_months_schedule(self):
         with Session(self.engine) as session:
             self._contract(session, number="ежемесячный")
             march = self._contract(
@@ -234,6 +241,42 @@ class AutoContractPackagesTest(unittest.TestCase):
             )
             self.assertNotIn(
                 "Объект апрель-октябрь", {row.label for row in result.skipped}
+            )
+
+    def test_sole_proprietor_payer_creates_package(self):
+        with Session(self.engine) as session:
+            self._contract(
+                session,
+                number="ИП-плательщик",
+                client_type="sole_proprietor",
+            )
+            session.commit()
+
+            result = run_auto_contract_packages(
+                session, date(2026, 9, 1), self._generator
+            )
+
+            self.assertEqual(result.ready, ("Объект ИП-плательщик",))
+            self.assertIsNotNone(session.scalar(select(ContractPeriod.id)))
+            self.assertIsNotNone(session.scalar(select(InspectionReport.id)))
+
+    def test_individual_payer_is_reported_as_unsupported(self):
+        with Session(self.engine) as session:
+            self._contract(session, number="физлицо", client_type="individual")
+            session.commit()
+
+            result = run_auto_contract_packages(
+                session, date(2026, 9, 1), self._generator
+            )
+
+            self.assertEqual(result.ready, ())
+            self.assertEqual(
+                result.skipped[0].reasons,
+                ("тип плательщика не поддерживается",),
+            )
+            self.assertIn(
+                "Объект физлицо: тип плательщика не поддерживается",
+                format_auto_package_summary(result),
             )
 
     def test_treatment_creates_four_document_manifest_and_is_idempotent(self):
