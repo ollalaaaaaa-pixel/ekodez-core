@@ -6,6 +6,7 @@ export type ContractSummary = {
   id: number
   number: string
   price: string
+  inspection_price: string | null
   contract_date: string | null
   periodicity: 'monthly' | 'semiannual' | 'custom' | null
   service_months: number[]
@@ -122,6 +123,9 @@ export default function ContractPanel({
           number: values.number,
           contract_date: values.contract_date || null,
           price: String(values.price).replace(',', '.'),
+          inspection_price: values.inspection_price
+            ? String(values.inspection_price).replace(',', '.')
+            : null,
           periodicity: values.periodicity,
           service_months: values.periodicity === 'monthly' ? [] : values.service_months,
           payment_term_business_days: 5,
@@ -276,6 +280,12 @@ export default function ContractPanel({
                 {priceLabel(object.contract.price, object.contract.periodicity)}
               </Typography.Text>
               <Typography.Text>
+                Цена обследования:{' '}
+                {object.contract.inspection_price
+                  ? priceLabel(object.contract.inspection_price, null)
+                  : 'не задана'}
+              </Typography.Text>
+              <Typography.Text>
                 {periodicityOptions.find((item) => item.value === object.contract?.periodicity)?.label ??
                   'Периодичность не настроена'}
               </Typography.Text>
@@ -313,6 +323,7 @@ export default function ContractPanel({
           <Form.Item name="number" label="Номер договора" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="contract_date" label="Дата договора"><Input type="date" /></Form.Item>
           <Form.Item name="price" label="Цена договора" rules={[{ required: true, message: 'Введите цену вручную' }, { pattern: /^\d+(?:[.,]\d{1,2})?$/, message: 'Введите сумму' }]}><Input inputMode="decimal" /></Form.Item>
+          <Form.Item name="inspection_price" label="Цена обследования" rules={[{ pattern: /^\d+(?:[.,]\d{1,2})?$/, message: 'Введите сумму' }]}><Input inputMode="decimal" placeholder="Заполняет владелец" /></Form.Item>
           <Form.Item name="periodicity" label="Периодичность" rules={[{ required: true }]}><Select options={periodicityOptions} /></Form.Item>
           {periodicity && periodicity !== 'monthly' ? (
             <Form.Item name="service_months" label="Оплачиваемые месяцы" rules={[{ required: true }]}><Select mode="multiple" options={monthOptions} /></Form.Item>

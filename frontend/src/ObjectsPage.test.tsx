@@ -13,6 +13,7 @@ const objectRow = {
     id: 1,
     number: '17/08',
     price: '5000.00',
+    inspection_price: '3000.00',
     contract_date: '2026-08-17',
     periodicity: 'monthly',
     service_months: [],
@@ -112,6 +113,7 @@ describe('Objects screen', () => {
     await user.click((await screen.findAllByRole('button', { name: 'Открыть' }))[0])
     await user.click(await screen.findByRole('button', { name: 'Настроить договор' }))
     expect((screen.getByLabelText('Цена договора') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('Цена обследования') as HTMLInputElement).value).toBe('')
   })
 
   test('package form includes inspection and payment fields', async () => {

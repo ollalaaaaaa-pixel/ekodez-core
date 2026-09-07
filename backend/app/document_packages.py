@@ -32,6 +32,13 @@ class PackageManifest:
     files: tuple[PackageFile, ...]
 
 
+@dataclass(frozen=True)
+class PackageDocument:
+    kind: str
+    name: str
+    values: dict[str, str]
+
+
 TEMPLATES = {
     "inspection": ("inspection-act.docx", "Акт_осмотра.docx"),
     "work_act": ("work-completion-act.docx", "Акт_выполненных_работ.docx"),
@@ -172,16 +179,41 @@ def build_month_package(
     if paid_service_due:
         selected.extend(("work_act", "invoice"))
 
-    sources = {kind: template_dir / TEMPLATES[kind][0] for kind in selected}
+    documents = tuple(
+        PackageDocument(kind=kind, name=TEMPLATES[kind][1], values=values)
+        for kind in selected
+    )
+    return build_document_package(
+        template_dir=template_dir,
+        output_root=output_root,
+        object_name=object_name,
+        period_month=period_month,
+        documents=documents,
+    )
+
+
+def build_document_package(
+    *,
+    template_dir: Path,
+    output_root: Path,
+    object_name: str,
+    period_month: date,
+    documents: tuple[PackageDocument, ...],
+) -> PackageManifest:
+    sources = {
+        index: template_dir / TEMPLATES[item.kind][0]
+        for index, item in enumerate(documents)
+    }
     missing_files = [str(path) for path in sources.values() if not path.is_file()]
     if missing_files:
         raise DocumentTemplateError("missing templates: " + ", ".join(missing_files))
-    required = set().union(*(_tokens_in_package(path) for path in sources.values()))
-    missing_values = sorted(required - values.keys())
-    if missing_values:
-        raise DocumentTemplateError(
-            "missing template values: " + ", ".join(missing_values)
-        )
+    for index, item in enumerate(documents):
+        required = _tokens_in_package(sources[index])
+        missing_values = sorted(required - item.values.keys())
+        if missing_values:
+            raise DocumentTemplateError(
+                "missing template values: " + ", ".join(missing_values)
+            )
 
     root = output_root.resolve()
     parent = root / period_month.strftime("%Y-%m") / _safe_component(object_name)
@@ -191,13 +223,13 @@ def build_month_package(
     temporary = Path(tempfile.mkdtemp(prefix=".package-", dir=parent))
     try:
         files: list[PackageFile] = []
-        for kind in selected:
-            destination = temporary / TEMPLATES[kind][1]
-            _fill_template(sources[kind], destination, values)
+        for index, item in enumerate(documents):
+            destination = temporary / item.name
+            _fill_template(sources[index], destination, item.values)
             content = destination.read_bytes()
             files.append(
                 PackageFile(
-                    kind=kind,
+                    kind=item.kind,
                     name=destination.name,
                     size=len(content),
                     sha256=hashlib.sha256(content).hexdigest(),

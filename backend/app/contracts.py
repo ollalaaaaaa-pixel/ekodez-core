@@ -104,6 +104,8 @@ class ContractPeriodOut(BaseModel):
     infestation_degree: str
     extra_services: list[str]
     invoice_number: str | None
+    treatment_invoice_number: str | None
+    treatment_price_snapshot: str | None
     invoice_date: date | None
     work_act_status: DocumentStatus
     work_act_signed_at: datetime | None
@@ -133,11 +135,17 @@ def is_paid_month(contract: Contract, value: date) -> bool:
 
 
 def next_invoice_number(session: Session) -> str:
-    numbers = session.scalars(
+    inspection_numbers = session.scalars(
         select(ContractPeriod.invoice_number).where(
             ContractPeriod.invoice_number.is_not(None)
         )
     ).all()
+    treatment_numbers = session.scalars(
+        select(ContractPeriod.treatment_invoice_number).where(
+            ContractPeriod.treatment_invoice_number.is_not(None)
+        )
+    ).all()
+    numbers = [*inspection_numbers, *treatment_numbers]
     numeric = [int(value) for value in numbers if value is not None and value.isdigit()]
     return str(max(numeric, default=0) + 1)
 
@@ -235,6 +243,12 @@ def serialize_period(row: ContractPeriod) -> ContractPeriodOut:
         infestation_degree=row.infestation_degree,
         extra_services=row.extra_services or [],
         invoice_number=row.invoice_number,
+        treatment_invoice_number=row.treatment_invoice_number,
+        treatment_price_snapshot=(
+            decimal_string(row.treatment_price_snapshot)
+            if row.treatment_price_snapshot is not None
+            else None
+        ),
         invoice_date=row.invoice_date,
         work_act_status=row.work_act_status,  # type: ignore[arg-type]
         work_act_signed_at=row.work_act_signed_at,
