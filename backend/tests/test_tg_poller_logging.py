@@ -143,13 +143,20 @@ class TelegramPollerLoggingTest(unittest.TestCase):
             "result": [
                 {
                     "update_id": 124,
-                    "message": {"chat": {"id": 77}, "text": text},
+                    "message": {
+                        "chat": {"id": 77, "type": "private"},
+                        "from": {"id": 42},
+                        "text": text,
+                    },
                 }
             ],
         }
 
         with (
             patch.object(tg_poller, "_load_offset", return_value=0),
+            patch.object(
+                tg_poller, "_allowed_sender_roles", return_value={42: "owner"}
+            ),
             patch.object(tg_poller, "_save_offset"),
             patch.object(tg_poller, "_ingest", return_value="created"),
             patch.object(tg_poller, "_send_message") as send_message,
@@ -176,7 +183,8 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 {
                     "update_id": 125,
                     "message": {
-                        "chat": {"id": 78},
+                        "chat": {"id": 78, "type": "private"},
+                        "from": {"id": 42},
                         "text": "id сделки: 999103",
                     },
                 }
@@ -185,6 +193,9 @@ class TelegramPollerLoggingTest(unittest.TestCase):
 
         with (
             patch.object(tg_poller, "_load_offset", return_value=0),
+            patch.object(
+                tg_poller, "_allowed_sender_roles", return_value={42: "owner"}
+            ),
             patch.object(tg_poller, "_save_offset"),
             patch.object(tg_poller, "_ingest", return_value="duplicate"),
             patch.object(tg_poller, "_send_message") as send_message,

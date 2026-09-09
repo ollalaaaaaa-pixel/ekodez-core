@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card, Col, DatePicker, Empty, List, Row, Spin, Statistic, Typography } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { API } from './api'
+import MarketingPanel from './MarketingPanel'
 import './DashboardPage.css'
 
 const { RangePicker } = DatePicker
@@ -112,6 +113,7 @@ export default function DashboardPage() {
           <Col xs={12} lg={6}><Card><Statistic title="Конверсия" value={data?.conversion_rate ?? '0.00'} suffix="%" /></Card></Col>
           <Col xs={12} lg={6}><Card><Statistic title="Средний чек" value={money(data?.average_check ?? '0')} suffix="₽" /></Card></Col>
         </Row>
+        <MarketingPanel key={query} query={query} />
         <Card className="dashboard-best-day">
           <Typography.Text type="secondary">Лучший день</Typography.Text>
           <div className="dashboard-best-day-value">

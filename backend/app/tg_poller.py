@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
 from sqlalchemy import select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.finance_categories import (
@@ -21,6 +22,7 @@ from app.finance_categories import (
 )
 from app.inventory import ChemicalUsageIn
 from app.lead_parser import parse_amount_note, parse_order_text
+from app.marketing_intake import purge_expired_client_drafts, receive_client_message
 from app.master_workflow import (
     InvalidCompletion,
     InvalidExecutionDate,
@@ -873,6 +875,11 @@ def _process_update(
     sender_value = (msg.get("from") or {}).get("id")
     sender_id = sender_value if isinstance(sender_value, int) else None
     actor_key = allowed_roles.get(sender_id) if sender_id is not None else None
+    is_public_private = (
+        message is not None
+        and actor_key is None
+        and (message.get("chat") or {}).get("type") == "private"
+    )
 
     if message is not None and command == "/whoami":
         if chat_id is not None:
@@ -882,7 +889,30 @@ def _process_update(
         if actor_key is not None and chat_id is not None:
             _send_today(token, engine, chat_id)
         return
-    if "id сделки" in text.lower():
+    update_id = update.get("update_id")
+    if (
+        message is not None
+        and isinstance(update_id, int)
+        and isinstance(chat_id, int)
+        and sender_id is not None
+    ):
+        client_reply = receive_client_message(
+            engine,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            text=text,
+            update_id=update_id,
+            now=datetime.now(UTC).replace(tzinfo=None),
+            is_staff=actor_key is not None,
+            is_private=(message.get("chat") or {}).get("type") == "private",
+        )
+        if client_reply is not None and client_reply:
+            _send_message(token, chat_id, client_reply)
+        if is_public_private:
+            return
+    if "id сделки" in text.lower() and (
+        channel_post is not None or actor_key is not None
+    ):
         result = _ingest(engine, text)
         if message is not None and chat_id is not None and result == "created":
             order_data = parse_order_text(text)
@@ -907,8 +937,15 @@ def _process_update(
 def _loop(token: str, engine) -> None:
     offset = _load_offset()
     allowed_roles = _allowed_sender_roles()
+    last_purge: datetime | None = None
     while True:
         try:
+            now = datetime.now(UTC).replace(tzinfo=None)
+            if isinstance(engine, Engine) and (
+                last_purge is None or now - last_purge >= timedelta(minutes=5)
+            ):
+                purge_expired_client_drafts(engine, now=now)
+                last_purge = now
             url = (
                 "https://api.telegram.org/bot"
                 + token

@@ -40,6 +40,7 @@ class Transaction(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    marketing_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     entered_by: Mapped[str] = mapped_column(String(50), default="Артем")
     kind: Mapped[str] = mapped_column(String(20), default="unknown")
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -219,6 +220,21 @@ class TelegramMasterDraft(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),  # noqa: UP017
     )
+
+
+class TelegramClientDraft(Base):
+    __tablename__ = "telegram_client_drafts"
+
+    chat_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(50))
+    step: Mapped[str] = mapped_column(String(30))
+    encrypted_payload: Mapped[str] = mapped_column(Text)
+    last_update_id: Mapped[int] = mapped_column()
+    last_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    window_started: Mapped[datetime] = mapped_column(DateTime)
+    message_count: Mapped[int] = mapped_column(default=1)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class SentReport(Base):

@@ -77,8 +77,9 @@ from app.inventory import (
     serialize_inventory,
     serialize_inventory_treatment,
 )
-from app.lead_dictionaries import LEAD_SOURCES
+from app.lead_dictionaries import LEAD_SOURCES, source_from_utm
 from app.lead_parser import parse_amount_note, parse_order_text
+from app.marketing_metrics import MARKETING_CHANNELS, marketing_metrics
 from app.master_workflow import PERFORMERS
 from app.models import (
     ChemicalUsage,
@@ -182,6 +183,7 @@ class TransactionOut(BaseModel):
     description: str | None
     category: str | None
     channel: str | None
+    marketing_source: str | None
     kind: str
     review_required: bool
     object_id: int | None
@@ -211,6 +213,7 @@ class TransactionPatchIn(BaseModel):
     operation_date: date | None = None
     category: str | None = None
     description: str | None = None
+    marketing_source: str | None = None
 
     @field_validator("operation_date")
     @classmethod
@@ -226,6 +229,7 @@ class DayEntryIn(BaseModel):
     kind: str
     category: str
     channel: str | None = None
+    marketing_source: str | None = None
     amount: Decimal
     comment: str | None = None
     entered_by: str = "Артем"
@@ -389,6 +393,7 @@ class LeadOut(BaseModel):
 class RawTextIn(BaseModel):
     text: str
     source: str = "telegram"
+    utm_source: str | None = Field(default=None, max_length=50)
     category: str | None = None
     amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     execution_date: date | None = None
@@ -1478,6 +1483,7 @@ def _transaction_out(session: Session, row: Transaction) -> TransactionOut:
         description=row.description,
         category=row.category,
         channel=row.channel,
+        marketing_source=row.marketing_source,
         kind=row.kind,
         review_required=row.review_required,
         object_id=row.object_id,
@@ -1581,6 +1587,31 @@ def update_transaction(tx_id: int, payload: TransactionPatchIn):
                     status_code=422,
                     detail="classify transaction before editing category",
                 )
+        resulting_category = changes.get("category", row.category)
+        resulting_source = changes.get("marketing_source", row.marketing_source)
+        if "marketing_source" in changes and resulting_source is not None:
+            if row.kind != "expense" or resulting_category != "Реклама":
+                raise HTTPException(
+                    status_code=422,
+                    detail="marketing source requires advertising expense",
+                )
+            if resulting_source not in MARKETING_CHANNELS:
+                raise HTTPException(status_code=422, detail="bad marketing source")
+        if (
+            ("category" in changes or "marketing_source" in changes)
+            and resulting_category == "Реклама"
+            and not resulting_source
+        ):
+            raise HTTPException(
+                status_code=422, detail="advertising source is required"
+            )
+        if row.kind == "expense" and resulting_category != "Реклама":
+            changes["marketing_source"] = None
+            changes["channel"] = None
+        elif row.kind == "expense" and "marketing_source" in changes:
+            changes["channel"] = (
+                MARKETING_CHANNELS[resulting_source] if resulting_source else None
+            )
         for field_name, value in changes.items():
             setattr(row, field_name, value)
         session.commit()
@@ -1812,6 +1843,24 @@ def list_expense_categories():
             .where(ExpenseCategory.is_active == True)
             .order_by(ExpenseCategory.id)
         ).all()
+
+
+@app.get("/api/analytics/marketing")
+def get_marketing_metrics(
+    request: Request, start_date: date = Query(), end_date: date = Query()
+):
+    if not request.client or request.client.host not in (
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    ):
+        raise HTTPException(
+            status_code=403, detail="marketing analytics is localhost only"
+        )
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="invalid period")
+    with Session(engine) as session:
+        return marketing_metrics(session, start_date, end_date)
 
 
 @app.post("/api/expense-categories", response_model=ExpenseCategoryOut)
@@ -2106,6 +2155,20 @@ def get_day(day: date = Query(alias="date")):
 
 @app.post("/api/day/entry", response_model=TransactionOut)
 def create_day_entry(payload: DayEntryIn):
+    if (
+        payload.kind == "expense"
+        and payload.category == "Реклама"
+        and payload.marketing_source is None
+    ):
+        raise HTTPException(status_code=422, detail="advertising source is required")
+    if payload.marketing_source is not None and (
+        payload.marketing_source not in MARKETING_CHANNELS
+        or payload.kind != "expense"
+        or payload.category != "Реклама"
+    ):
+        raise HTTPException(
+            status_code=422, detail="marketing source requires advertising expense"
+        )
     if payload.kind not in ("income", "expense"):
         raise HTTPException(status_code=422, detail="bad kind")
     if payload.kind == "income" and payload.category not in INCOME_CATEGORIES_V1:
@@ -2132,7 +2195,12 @@ def create_day_entry(payload: DayEntryIn):
             currency="RUB",
             description=payload.comment,
             category=payload.category,
-            channel=_transaction_channel(payload.kind, payload.channel),
+            channel=(
+                MARKETING_CHANNELS[payload.marketing_source]
+                if payload.marketing_source
+                else _transaction_channel(payload.kind, payload.channel)
+            ),
+            marketing_source=payload.marketing_source,
             entered_by=payload.entered_by,
             kind=payload.kind,
             review_required=False,
@@ -2232,7 +2300,7 @@ def ingest_lead(payload: RawTextIn):
                 return _masked_lead(existing)
         protected = protect_lead_pii(data, payload.text)
         row = Lead(
-            source=payload.source,
+            source=source_from_utm(payload.utm_source, payload.source),
             category=payload.category,
             external_id=data["external_id"] or None,
             order_at=data["order_at"],
