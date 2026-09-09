@@ -1117,13 +1117,40 @@ def save_document_profile(
     return {"status": "configured"}
 
 
+def _representative_role_genitive(role: str) -> str:
+    return {
+        "генеральный директор": "генерального директора",
+        "директор": "директора",
+    }.get(role.strip().lower(), role.strip())
+
+
+def _representative_name_genitive(name: str) -> str:
+    parts = name.strip().split()
+    if len(parts) != 3 or any("." in part for part in parts):
+        return name.strip()
+    surname, first_name, patronymic = parts
+    lowered = surname.lower()
+    if lowered.endswith(("ова", "ева", "ина", "ына")):
+        surname = f"{surname[:-1]}ой"
+    elif lowered.endswith("ая"):
+        surname = f"{surname[:-2]}ой"
+    else:
+        return name.strip()
+    return f"{surname} {first_name[0]}.{patronymic[0]}."
+
+
 def _client_representation(values: dict[str, str | None]) -> str:
     name = values.get("name") or ""
     representative = values.get("representative") or ""
     role = values.get("representative_role") or "представителя"
     if values.get("client_type") == "legal_entity" and representative:
-        return f"{name} в лице {role} {representative}"
+        return (
+            f"{name} в лице {_representative_role_genitive(role)} "
+            f"{_representative_name_genitive(representative)}"
+        )
     if values.get("client_type") == "sole_proprietor":
+        if name.casefold().startswith("ип "):
+            return name
         return f"Индивидуальный предприниматель {name}"
     return name
 
@@ -1233,6 +1260,7 @@ def _package_values(
         "TOTAL_WORDS": f"{price_text} рублей",
     }
     values.update(profile)
+    values["TAX_MODE"] = "НДС не облагается (УСН)"
     return values
 
 
