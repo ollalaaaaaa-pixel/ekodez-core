@@ -20,6 +20,24 @@ from app.security.pii import encrypt_sensitive_mapping
 
 
 class ContractsAndActsApiTest(unittest.TestCase):
+    def test_invoice_money_words(self):
+        cases = {
+            "0.00": "ноль рублей 00 копеек",
+            "1.01": "один рубль 01 копейка",
+            "2.02": "два рубля 02 копейки",
+            "11.11": "одиннадцать рублей 11 копеек",
+            "3000.00": "три тысячи рублей 00 копеек",
+            "21001.21": "двадцать одна тысяча один рубль 21 копейка",
+            "1500000.50": "один миллион пятьсот тысяч рублей 50 копеек",
+            "1000000000.00": "один миллиард рублей 00 копеек",
+        }
+        for amount, expected in cases.items():
+            with self.subTest(amount=amount):
+                self.assertEqual(main._money_words(Decimal(amount)), expected)
+        for amount in ("-1.00", "1000000000000.00"):
+            with self.assertRaises(main.DocumentTemplateError):
+                main._money_words(Decimal(amount))
+
     def setUp(self):
         self.original_engine = main.engine
         self.engine = create_engine(
@@ -350,6 +368,15 @@ class ContractsAndActsApiTest(unittest.TestCase):
             self.assertIn("НДС не облагается (УСН)", package_text)
             self.assertNotIn("БЕЗ НДС", package_text)
             self.assertNotIn("Претензий нет..", package_text)
+            invoice = Document(str(package_dir / "Счёт.docx"))
+            invoice_text = "\n".join(
+                [p.text for p in invoice.paragraphs]
+                + [c.text for t in invoice.tables for r in t.rows for c in r.cells]
+            )
+            self.assertNotIn("legal_entity", invoice_text)
+            self.assertNotIn("sole_proprietor", invoice_text)
+            self.assertNotIn("рублей рублей", invoice_text)
+            self.assertIn("пять тысяч рублей 00 копеек", invoice_text)
             for file_name in ("Акт_выполненных_работ.docx", "Счёт.docx"):
                 document = Document(str(package_dir / file_name))
                 total_row = next(

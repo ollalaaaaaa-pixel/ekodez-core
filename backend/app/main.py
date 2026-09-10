@@ -1112,6 +1112,104 @@ def save_document_profile(
     return {"status": "configured"}
 
 
+def _money_words(amount: Decimal) -> str:
+    """Render a non-negative two-decimal invoice amount without float arithmetic."""
+    amount = amount.quantize(Decimal("0.01"))
+    if amount < 0 or amount >= Decimal("1000000000000"):
+        raise DocumentTemplateError("invoice amount is outside supported range")
+
+    def form(number: int, forms: tuple[str, str, str]) -> str:
+        if 11 <= number % 100 <= 14:
+            return forms[2]
+        return (
+            forms[0]
+            if number % 10 == 1
+            else forms[1] if 2 <= number % 10 <= 4 else forms[2]
+        )
+
+    ones = [
+        "ноль",
+        "один",
+        "два",
+        "три",
+        "четыре",
+        "пять",
+        "шесть",
+        "семь",
+        "восемь",
+        "девять",
+    ]
+    teens = [
+        "десять",
+        "одиннадцать",
+        "двенадцать",
+        "тринадцать",
+        "четырнадцать",
+        "пятнадцать",
+        "шестнадцать",
+        "семнадцать",
+        "восемнадцать",
+        "девятнадцать",
+    ]
+    tens = [
+        "",
+        "",
+        "двадцать",
+        "тридцать",
+        "сорок",
+        "пятьдесят",
+        "шестьдесят",
+        "семьдесят",
+        "восемьдесят",
+        "девяносто",
+    ]
+    hundreds = [
+        "",
+        "сто",
+        "двести",
+        "триста",
+        "четыреста",
+        "пятьсот",
+        "шестьсот",
+        "семьсот",
+        "восемьсот",
+        "девятьсот",
+    ]
+    groups = [
+        ("", "", ""),
+        ("тысяча", "тысячи", "тысяч"),
+        ("миллион", "миллиона", "миллионов"),
+        ("миллиард", "миллиарда", "миллиардов"),
+    ]
+    rubles = int(amount)
+    parts: list[str] = []
+    for index in range(3, -1, -1):
+        value = rubles // (1000**index) % 1000
+        if not value:
+            continue
+        if value // 100:
+            parts.append(hundreds[value // 100])
+        remainder = value % 100
+        if 10 <= remainder <= 19:
+            parts.append(teens[remainder - 10])
+        else:
+            if remainder // 10:
+                parts.append(tens[remainder // 10])
+            unit = remainder % 10
+            if unit:
+                parts.append(
+                    {1: "одна", 2: "две"}.get(unit, ones[unit])
+                    if index == 1
+                    else ones[unit]
+                )
+        if index:
+            parts.append(form(value, groups[index]))
+    kopecks = int((amount - rubles) * 100)
+    ruble_unit = form(rubles, ("рубль", "рубля", "рублей"))
+    kopeck_unit = form(kopecks, ("копейка", "копейки", "копеек"))
+    return f"{' '.join(parts) or 'ноль'} {ruble_unit} {kopecks:02d} {kopeck_unit}"
+
+
 def _representative_role_genitive(role: str) -> str:
     return {
         "генеральный директор": "генерального директора",
@@ -1191,7 +1289,16 @@ def _package_values(
         "CLIENT_NAME": client_values.get("name") or "",
         "CLIENT_REMARKS": "Претензий нет",
         "CLIENT_REPRESENTATION": _client_representation(client_values),
-        "CLIENT_SIGNATURE_ROLE": client_values.get("representative_role") or "Заказчик",
+        "CLIENT_REPRESENTATION_SENTENCE": _client_representation(client_values).rstrip(
+            "."
+        )
+        + ".",
+        "CLIENT_SIGNATURE_ROLE": client_values.get("representative_role")
+        or (
+            "ИП"
+            if client_values.get("client_type") == "sole_proprietor"
+            else "Заказчик"
+        ),
         "CLIENT_TYPE": client_values.get("client_type") or "",
         "CONCLUSION": (
             "Обработка не требуется"
@@ -1205,7 +1312,12 @@ def _package_values(
             else ""
         ),
         "CONTRACT_NUM": contract.number,
-        "DIRECTOR_SHORT": client_values.get("representative") or "",
+        "DIRECTOR_SHORT": client_values.get("representative")
+        or (
+            (client_values.get("name") or "").removeprefix("ИП ")
+            if client_values.get("client_type") == "sole_proprietor"
+            else ""
+        ),
         "INN": client_values.get("inn") or "",
         "INSECT_ACTIVITY_COUNT": str(report.insects_caught),
         "INSECT_ACTIVITY_NOTE": period.infestation_degree,
@@ -1252,7 +1364,7 @@ def _package_values(
         "PAYMENT_DUE_DATE": due_date,
         "PRICE": price_text,
         "SERVICE_NAME": "Услуги по договору санитарного обслуживания",
-        "TOTAL_WORDS": f"{price_text} рублей",
+        "TOTAL_WORDS": _money_words(Decimal(price)),
     }
     values.update(profile)
     values["TAX_MODE"] = "НДС не облагается (УСН)"
@@ -1295,7 +1407,7 @@ def _auto_package_documents(draft: AutoPackageDraft) -> list[dict[str, object]]:
                 "SERVICE_1": "Обработка по договору санитарного обслуживания",
                 "SERVICE_NAME": "Обработка по договору санитарного обслуживания",
                 "TOTAL": treatment_price_text,
-                "TOTAL_WORDS": f"{treatment_price_text} рублей",
+                "TOTAL_WORDS": _money_words(Decimal(treatment_price_text)),
                 "UNIT_PRICE_1": treatment_price_text,
             }
         )
