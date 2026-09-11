@@ -7,9 +7,11 @@ import { ArrowRightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/ico
 import dayjs from 'dayjs'
 import './DayPage.css'
 import { API } from './api'
-import { INCOME_CATEGORIES } from './dictionaries'
+import { INCOME_CATEGORIES, LEAD_SOURCES } from './dictionaries'
+import { validateDayEntry } from './dayEntryValidation'
 
 const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафан', 'Прочее'] as const
+const MARKETING_SOURCES = LEAD_SOURCES.filter(item => ['yandex_direct', 'vk', 'avito', 'seo'].includes(item.value))
 
 type Kind = 'income' | 'expense'
 type CategoryTotal = { kind: Kind; category: string; total: string }
@@ -26,11 +28,12 @@ type DayData = {
 type Draft = {
   kind: Kind; category: string; channel: string; amount: number | null; comment: string
   objectId: number | null
+  marketingSource: string
 }
 type CategoryTarget = 'desktop' | 'mobile'
 
 const emptyDraft = (kind: Kind): Draft => ({
-  kind, category: '', channel: '', amount: null, comment: '', objectId: null,
+  kind, category: '', channel: '', amount: null, comment: '', objectId: null, marketingSource: '',
 })
 const money = (value: string | number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
@@ -90,14 +93,15 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
   }, [data])
 
   const saveDraft = async (draft: Draft, source: CategoryTarget) => {
-    if (!draft.category) { message.warning('Выберите категорию'); return }
-    if (!draft.amount || draft.amount <= 0) { message.warning('Введите сумму больше нуля'); return }
+    const validationError = validateDayEntry(draft)
+    if (validationError) { message.warning(validationError); return }
     setSaving(true)
     try {
       const response = await fetch(`${API}/api/day/entry`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          kind: draft.kind, category: draft.category, amount: draft.amount,
+          kind: draft.kind, category: draft.category, amount: draft.amount!.toFixed(2),
+          marketing_source: draft.kind === 'expense' && draft.category === 'Реклама' ? draft.marketingSource || null : null,
           channel: draft.kind === 'income' ? draft.channel || null : null,
           object_id: draft.kind === 'income' ? draft.objectId : null,
           comment: draft.comment || null, entered_by: enteredBy, date: selectedDate,
@@ -179,6 +183,10 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
           options={objects.map((item) => ({ value: item.id, label: item.name }))} />}
         {kind === 'expense' && <Button className="day-new-category"
           icon={<PlusOutlined />} onClick={() => openCategoryModal('desktop')}>Новая категория</Button>}
+        {kind === 'expense' && draft.category === 'Реклама' && <Select
+          aria-label="Источник рекламного расхода" placeholder="Источник рекламы"
+          value={draft.marketingSource || undefined} options={MARKETING_SOURCES}
+          onChange={(value) => setDraft({ ...draft, marketingSource: value ?? '' })} />}
         <InputNumber className="day-amount-input" min={0} precision={2}
           placeholder="Сумма" value={draft.amount}
           onChange={(amount) => setDraft({ ...draft, amount })} />
@@ -269,6 +277,10 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
             options={objects.map((item) => ({ value: item.id, label: item.name }))} />}
           {mobileDraft.kind === 'expense' && <Button block className="day-new-category" icon={<PlusOutlined />}
             onClick={() => openCategoryModal('mobile')}>Новая категория</Button>}
+          {mobileDraft.kind === 'expense' && mobileDraft.category === 'Реклама' && <Select
+            aria-label="Источник рекламного расхода" placeholder="Источник рекламы"
+            value={mobileDraft.marketingSource || undefined} options={MARKETING_SOURCES}
+            onChange={(value) => setMobileDraft({ ...mobileDraft, marketingSource: value ?? '' })} />}
           <InputNumber className="day-mobile-amount" min={0} precision={2} placeholder="Сумма"
             value={mobileDraft.amount} onChange={(amount) => setMobileDraft({ ...mobileDraft, amount })} />
           <Input.TextArea rows={3} placeholder="Комментарий" value={mobileDraft.comment}

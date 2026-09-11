@@ -207,4 +207,51 @@ describe('Finance object linking', () => {
       }),
     ))
   }, 15_000)
+
+  test('shows and corrects the source of an advertising expense', async () => {
+    const transaction = {
+      id: 13, source: 'manual', operation_date: '2026-09-08', amount: '6000.00',
+      currency: 'RUB', counterparty: null, description: 'Кампания',
+      category: 'Реклама', marketing_source: null, kind: 'expense',
+      review_required: false, object_id: null, object_name: null, lead_id: null,
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([])
+      if (url.endsWith('/api/expense-categories')) {
+        return jsonResponse([{ id: 1, name: 'Реклама' }])
+      }
+      if (url.endsWith('/api/finance/summary')) {
+        return jsonResponse({ income: '0.00', expense: '6000.00', review_count: 0 })
+      }
+      if (url.includes('/api/analytics/channels')) {
+        return jsonResponse({ period_total: '0.00', channels: [] })
+      }
+      if (url.endsWith('/api/transactions/13') && init?.method === 'PATCH') {
+        return jsonResponse({ ...transaction, ...JSON.parse(String(init.body)) })
+      }
+      return jsonResponse([transaction])
+    })
+    const user = userEvent.setup()
+    render(<FinancePage />)
+
+    expect(await screen.findByText('Источник: не указан')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Редактировать' }))
+    await user.click(screen.getByLabelText('Источник рекламы'))
+    await user.click(await screen.findByText('ВКонтакте'))
+    await user.click(screen.getByRole('button', { name: 'Сохранить операцию' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/transactions/13',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          operation_date: '2026-09-08',
+          category: 'Реклама',
+          description: 'Кампания',
+          marketing_source: 'vk',
+        }),
+      }),
+    ))
+  }, 20_000)
 })

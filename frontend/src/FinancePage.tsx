@@ -9,7 +9,7 @@ import {
 import dayjs from 'dayjs'
 import { API } from './api'
 import BankImportDrawer from './BankImportDrawer'
-import { INCOME_CATEGORIES } from './dictionaries'
+import { INCOME_CATEGORIES, LEAD_SOURCES } from './dictionaries'
 import './FinancePage.css'
 
 type Tx = {
@@ -21,6 +21,7 @@ type Tx = {
   counterparty: string | null
   description: string | null
   category: string | null
+  marketing_source: string | null
   kind: string
   review_required: boolean
   object_id: number | null
@@ -78,6 +79,12 @@ const kindLabel: Record<string, { text: string; color: string }> = {
   own_transfer: { text: 'Перевод', color: 'blue' },
   unknown: { text: 'Неизвестно', color: 'default' },
 }
+const MARKETING_SOURCES = LEAD_SOURCES.filter(item =>
+  ['yandex_direct', 'vk', 'avito', 'seo'].includes(item.value),
+)
+const marketingSourceLabel = Object.fromEntries(
+  MARKETING_SOURCES.map((item) => [item.value, item.label]),
+)
 
 export default function FinancePage() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -100,6 +107,7 @@ export default function FinancePage() {
   const [leadLoading, setLeadLoading] = useState(false)
   const [error, setError] = useState('')
   const [editForm] = Form.useForm()
+  const editedCategory = Form.useWatch('category', editForm)
 
   const load = () => {
     fetch(API + '/api/finance/summary')
@@ -189,6 +197,7 @@ export default function FinancePage() {
       operation_date: transaction.operation_date,
       category: transaction.category,
       description: transaction.description,
+      marketing_source: transaction.marketing_source,
     })
     if (transaction.kind === 'expense' && expenseCategories.length === 0) {
       try {
@@ -206,6 +215,7 @@ export default function FinancePage() {
     operation_date: string
     category?: string
     description?: string
+    marketing_source?: string
   }) => {
     if (!editing) return
     setEditSaving(true)
@@ -218,6 +228,9 @@ export default function FinancePage() {
             : {}
         ),
         description: values.description?.trim() || null,
+        ...(editing.kind === 'expense' && values.category === 'Реклама'
+          ? { marketing_source: values.marketing_source }
+          : {}),
       }
       const response = await fetch(`${API}/api/transactions/${editing.id}`, {
         method: 'PATCH',
@@ -271,6 +284,15 @@ export default function FinancePage() {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {r.counterparty}
             </Typography.Text>
+          ) : null}
+          {r.category === 'Реклама' ? (
+            <div>
+              <Tag color={r.marketing_source ? 'blue' : 'warning'}>
+                Источник: {r.marketing_source
+                  ? marketingSourceLabel[r.marketing_source] ?? r.marketing_source
+                  : 'не указан'}
+              </Tag>
+            </div>
           ) : null}
           {r.lead_id !== null ? (
             <div>
@@ -506,6 +528,15 @@ export default function FinancePage() {
                   : INCOME_CATEGORIES
                 ).map((value) => ({ value, label: value }))}
               />
+            </Form.Item>
+          )}
+          {editing?.kind === 'expense' && editedCategory === 'Реклама' && (
+            <Form.Item
+              name="marketing_source"
+              label="Источник рекламы"
+              rules={[{ required: true, message: 'Выберите источник рекламы' }]}
+            >
+              <Select options={MARKETING_SOURCES} />
             </Form.Item>
           )}
           <Form.Item name="description" label="Комментарий">

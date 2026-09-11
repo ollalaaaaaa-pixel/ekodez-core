@@ -15,6 +15,10 @@ export const LEAD_SOURCES = [
   { value: 'telegram', label: 'Telegram-бот' },
   { value: 'aggregators', label: 'Агрегаторы' },
   { value: 'other', label: 'Другое' },
+  { value: 'yandex_direct', label: 'Яндекс Директ' },
+  { value: 'vk', label: 'ВКонтакте' },
+  { value: 'avito', label: 'Авито' },
+  { value: 'seo', label: 'Поиск (SEO)' },
 ] as const
 
 export const LEAD_SOURCE_LABELS = Object.fromEntries(
