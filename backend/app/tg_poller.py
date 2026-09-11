@@ -846,6 +846,13 @@ def _handle_callback(
         _edit_message(token, chat_id, message_id, result_text)
 
 
+def _notify_quiz_owner(token: str, text: str) -> bool:
+    owner = os.getenv("OWNER_TG_ID", "").strip()
+    if not owner.isdecimal():
+        return False
+    return _send_message(token, int(owner), text)
+
+
 def _process_update(
     token: str,
     engine,
@@ -905,6 +912,7 @@ def _process_update(
             now=datetime.now(UTC).replace(tzinfo=None),
             is_staff=actor_key is not None,
             is_private=(message.get("chat") or {}).get("type") == "private",
+            notify_owner=lambda text: _notify_quiz_owner(token, text),
         )
         if client_reply is not None and client_reply:
             _send_message(token, chat_id, client_reply)

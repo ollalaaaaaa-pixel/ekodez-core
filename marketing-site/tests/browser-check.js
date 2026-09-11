@@ -20,7 +20,7 @@ async page => {
   await page.getByRole('button', {name:'Далее →', exact:true}).click();
   if (!await page.getByText('Заявка ещё не отправлена.',{exact:false}).isVisible()) throw new Error('False submission claim');
   const href=await page.getByRole('link',{name:'Открыть Telegram',exact:true}).getAttribute('href');
-  if(href!=='https://t.me/ekodez_bot?start=m_vk') throw new Error('Unsafe attribution link');
+  if(href!=='https://t.me/Ecodes29_Bot?start=quiz_vk') throw new Error('Unsafe attribution link');
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
   if(overflow) throw new Error('Mobile horizontal overflow');
   await page.screenshot({path:'marketing-site/quiz-mobile.png',fullPage:true});

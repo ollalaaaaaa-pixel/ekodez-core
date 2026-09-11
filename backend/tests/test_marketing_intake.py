@@ -15,6 +15,65 @@ from app.models import Base, Lead, TelegramClientDraft
 
 
 class MarketingIntakeTest(unittest.TestCase):
+    def test_arbitrary_quiz_campaign_starts_and_alerts_owner_without_phone(self):
+        sent = []
+
+        def send_message(token, chat_id, text, **kwargs):
+            sent.append((chat_id, text))
+            return True
+
+        def process(text, update_id):
+            tg_poller._process_update(
+                "TEST",
+                self.engine,
+                {
+                    "update_id": update_id,
+                    "message": {
+                        "chat": {"id": 12345, "type": "private"},
+                        "from": {"id": 12345},
+                        "text": text,
+                    },
+                },
+                {101: "owner"},
+            )
+
+        with (
+            patch.dict(os.environ, {"OWNER_TG_ID": "101"}),
+            patch.object(tg_poller, "_send_message", side_effect=send_message),
+        ):
+            process("/start quiz_Random-Campaign_42", 1)
+            with Session(self.engine) as s:
+                draft = s.scalar(select(TelegramClientDraft))
+                self.assertIsNotNone(draft)
+                assert draft is not None
+                self.assertEqual(draft.step, "consent")
+            self.assertEqual(len([x for x in sent if x[0] == 101]), 1)
+            self.assertIn("Random-Campaign_42", sent[0][1])
+            process("/start quiz_Random-Campaign_42", 1)
+            self.assertEqual(len([x for x in sent if x[0] == 101]), 1)
+            process("СОГЛАСЕН", 2)
+            process(
+                "Адрес: ТЕСТ улица, 7; телефон +7 (921) 000-11-22\nВредитель: Клопы", 3
+            )
+            process("+79210001122", 4)
+            process("ОТПРАВИТЬ", 5)
+            process("ОТПРАВИТЬ", 5)
+        owner_messages = [text for chat, text in sent if chat == 101]
+        self.assertEqual(len(owner_messages), 2)
+        self.assertIn("ТЕСТ улица", owner_messages[-1])
+        self.assertIn("Клопы", owner_messages[-1])
+        self.assertIn("Random-Campaign_42", owner_messages[-1])
+        self.assertNotIn("921", owner_messages[-1])
+        self.assertNotIn("000-11-22", owner_messages[-1])
+        with Session(self.engine) as s:
+            self.assertEqual(len(list(s.scalars(select(Lead)))), 1)
+
+    def test_quiz_campaign_preserved_for_maximum_token_and_invalid_rejected(self):
+        self.assertIsNone(self.send("/start quiz_", 1))
+        self.assertIsNone(self.send("/start quiz_" + "a" * 60, 2))
+        self.assertIsNone(self.send("/start quiz_<script>", 3))
+        self.assertIn("СОГЛАСЕН", self.send("/start quiz_" + "a" * 59, 4))
+
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
