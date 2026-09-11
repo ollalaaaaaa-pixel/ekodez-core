@@ -20,6 +20,178 @@ from app.security.pii import encrypt_sensitive_mapping
 
 
 class ContractsAndActsApiTest(unittest.TestCase):
+    def _new_package(self):
+        contract = self._create_contract()
+        path = f"/api/contracts/{contract['id']}/package/2026-09"
+        empty = self.client.get(path).json()
+        self.assertIsNone(empty["period"])
+        self.assertIsNone(empty["inspection"])
+        self.assertEqual(self.client.get(path).json(), empty)
+        response = self.client.patch(
+            path,
+            json={
+                "expected_revision": empty["revision"],
+                "inspection": {
+                    "inspection_date": "2026-09-25",
+                    "control_date": "2026-09-26",
+                    "ksp_count": 9,
+                },
+                "period": {
+                    "invoice_date": "2026-09-30",
+                    "preparations": "ТЕСТ средство",
+                    "extra_services": ["Услуга, с запятой"],
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return path, response.json()
+
+    def test_package_load_defaults_and_partial_update(self):
+        path, saved = self._new_package()
+        self.assertEqual(saved, self.client.get(path).json())
+        self.assertEqual(saved["inspection"]["ksp_count"], 9)
+        self.assertEqual(saved["period"]["infestation_degree"], "начальная")
+        self.assertEqual(saved["inspection"]["rodents_caught"], 0)
+        changed = self.client.patch(
+            path,
+            json={
+                "expected_revision": saved["revision"],
+                "period": {"infestation_degree": "Не обнаружено"},
+            },
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        data = changed.json()
+        self.assertEqual(data["inspection"], saved["inspection"])
+        for field in saved["period"]:
+            if field != "infestation_degree":
+                self.assertEqual(data["period"][field], saved["period"][field], field)
+        self.assertEqual(
+            self.client.patch(
+                path, json={"expected_revision": data["revision"]}
+            ).json(),
+            data,
+        )
+        self.assertEqual(
+            self.client.patch(
+                path,
+                json={
+                    "expected_revision": saved["revision"],
+                    "period": {"preparations": "stale"},
+                },
+            ).status_code,
+            409,
+        )
+
+    def test_protected_package_confirmation_versions_and_noop(self):
+        path, saved = self._new_package()
+        self._save_billing_client()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(main, "DOCUMENT_OUTPUT_ROOT", Path(temp_dir)),
+            patch.object(
+                main,
+                "_document_profile",
+                return_value={
+                    "EXECUTOR_BANK_DETAILS": "ТЕСТ",
+                    "EXECUTOR_INN": "ТЕСТ",
+                    "EXECUTOR_OGRNIP": "ТЕСТ",
+                    "TAX_MODE": "НДС не облагается (УСН)",
+                },
+            ),
+        ):
+            signed = self.client.patch(
+                path,
+                json={
+                    "expected_revision": saved["revision"],
+                    "generate": True,
+                    "inspection": {
+                        "status": "signed",
+                        "signed_at": "2026-09-30T12:00:00",
+                    },
+                    "period": {
+                        "work_act_status": "signed",
+                        "work_act_signed_at": "2026-09-30T12:00:00",
+                    },
+                },
+            )
+            self.assertEqual(signed.status_code, 200, signed.text)
+            original = signed.json()
+            blocked = self.client.patch(
+                f"/api/contract-periods/{original['period']['id']}",
+                json={"preparations": "ТЕСТ обход"},
+            )
+            self.assertEqual(blocked.status_code, 409)
+            self.assertEqual(original["period"]["file_manifest"][0]["version"], 1)
+            old_files = {str(p): p.read_bytes() for p in Path(temp_dir).rglob("*.docx")}
+            noop = self.client.patch(
+                path, json={"expected_revision": original["revision"], "generate": True}
+            )
+            self.assertEqual(noop.json(), original)
+            payload = {
+                "expected_revision": original["revision"],
+                "period": {"preparations": "ТЕСТ исправлено"},
+            }
+            denied = self.client.patch(path, json=payload)
+            self.assertEqual(denied.status_code, 409)
+            self.assertEqual(self.client.get(path).json(), original)
+            approved = self.client.patch(path, json={**payload, "confirm_edit": True})
+            self.assertEqual(approved.status_code, 200, approved.text)
+            updated = approved.json()
+            self.assertEqual(updated["period"]["file_manifest"][0]["version"], 2)
+            self.assertEqual(updated["inspection"], original["inspection"])
+            self.assertEqual(
+                updated["period"]["work_act_signed_at"],
+                original["period"]["work_act_signed_at"],
+            )
+            for name, content in old_files.items():
+                self.assertEqual(Path(name).read_bytes(), content)
+            with patch.object(
+                main,
+                "build_month_package",
+                side_effect=main.DocumentTemplateError("failed"),
+            ):
+                failed = self.client.patch(
+                    path,
+                    json={
+                        "expected_revision": updated["revision"],
+                        "confirm_edit": True,
+                        "inspection": {"ksp_count": 1},
+                    },
+                )
+                self.assertEqual(failed.status_code, 422)
+                self.assertEqual(self.client.get(path).json(), updated)
+
+    def test_package_edit_localhost_only(self):
+        path, saved = self._new_package()
+        remote = TestClient(main.app, client=("192.168.1.20", 51000))
+        try:
+            response = remote.patch(
+                path,
+                json={"expected_revision": saved["revision"]},
+                headers={"X-Forwarded-For": "127.0.0.1"},
+            )
+        finally:
+            remote.close()
+        self.assertEqual(response.status_code, 403)
+
+    def test_invoice_money_words(self):
+        cases = {
+            "0.00": "ноль рублей 00 копеек",
+            "1.01": "один рубль 01 копейка",
+            "2.02": "два рубля 02 копейки",
+            "11.11": "одиннадцать рублей 11 копеек",
+            "3000.00": "три тысячи рублей 00 копеек",
+            "21001.21": "двадцать одна тысяча один рубль 21 копейка",
+            "1500000.50": "один миллион пятьсот тысяч рублей 50 копеек",
+            "1000000000.00": "один миллиард рублей 00 копеек",
+        }
+        for amount, expected in cases.items():
+            with self.subTest(amount=amount):
+                self.assertEqual(main._money_words(Decimal(amount)), expected)
+        for amount in ("-1.00", "1000000000000.00"):
+            with self.assertRaises(main.DocumentTemplateError):
+                main._money_words(Decimal(amount))
+
     def setUp(self):
         self.original_engine = main.engine
         self.engine = create_engine(
@@ -350,6 +522,15 @@ class ContractsAndActsApiTest(unittest.TestCase):
             self.assertIn("НДС не облагается (УСН)", package_text)
             self.assertNotIn("БЕЗ НДС", package_text)
             self.assertNotIn("Претензий нет..", package_text)
+            invoice = Document(str(package_dir / "Счёт.docx"))
+            invoice_text = "\n".join(
+                [p.text for p in invoice.paragraphs]
+                + [c.text for t in invoice.tables for r in t.rows for c in r.cells]
+            )
+            self.assertNotIn("legal_entity", invoice_text)
+            self.assertNotIn("sole_proprietor", invoice_text)
+            self.assertNotIn("рублей рублей", invoice_text)
+            self.assertIn("пять тысяч рублей 00 копеек", invoice_text)
             for file_name in ("Акт_выполненных_работ.docx", "Счёт.docx"):
                 document = Document(str(package_dir / file_name))
                 total_row = next(

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Button, Card, Empty, Form, Input, Modal, Select, Space, Tag, Typography, message } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { Alert, Button, Card, Empty, Form, Input, Modal, Select, Space, Tag, Typography, message } from 'antd'
 import { API } from './api'
 
 export type ContractSummary = {
@@ -48,7 +48,18 @@ type Period = {
   paid_service_due: boolean
   price_snapshot: string | null
   file_manifest: Array<{ version: number; kind: string; name: string }>
+  generated_at: string | null
+  work_act_status: string
+  work_act_signed_at: string | null
 }
+type PackageState = {
+  period: (Period & Record<string, unknown>) | null
+  inspection: Record<string, unknown> | null
+  revision: string
+}
+const inspectionFields = ['inspection_date', 'control_date', 'ksp_count', 'derat_glue_count', 'bait_count', 'rodents_caught', 'deratization_result', 'disinsection_glue_count', 'insects_caught', 'disinsection_result', 'status']
+const periodFields = ['preparations', 'infestation_degree', 'extra_services', 'invoice_number', 'invoice_date', 'work_act_status', 'transaction_id']
+const countFields = new Set(['ksp_count', 'derat_glue_count', 'bait_count', 'rodents_caught', 'disinsection_glue_count', 'insects_caught'])
 
 const periodicityOptions = [
   { value: 'monthly', label: 'Ежемесячно' },
@@ -71,9 +82,6 @@ const priceLabel = (value: string, periodicity: ContractSummary['periodicity']) 
   return `${formatted} ₽${periodicity === 'monthly' ? '/мес' : ''}`
 }
 
-const today = new Date().toISOString().slice(0, 10)
-const currentMonth = today.slice(0, 7)
-
 export default function ContractPanel({
   object,
   onObjectUpdated,
@@ -88,10 +96,17 @@ export default function ContractPanel({
   const [timeline, setTimeline] = useState<TimelineEvent[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [period, setPeriod] = useState<Period | null>(null)
+  const [packageState, setPackageState] = useState<PackageState | null>(null)
+  const [packageBusy, setPackageBusy] = useState(false)
+  const [editConfirmed, setEditConfirmed] = useState(false)
+  const [loadedMonth, setLoadedMonth] = useState('')
+  const packageRequest = useRef(0)
+  const baseline = useRef<Record<string, unknown>>({})
   const [contractForm] = Form.useForm()
   const [billingForm] = Form.useForm()
   const [profileForm] = Form.useForm()
   const [packageForm] = Form.useForm()
+  const [confirmationModal, confirmationContext] = Modal.useModal()
   const periodicity = Form.useWatch('periodicity', contractForm)
 
   const loadTimeline = () => {
@@ -175,102 +190,126 @@ export default function ContractPanel({
     message.success('Реквизиты ЭКОДЕЗ сохранены в зашифрованном виде')
   }
 
-  const openPackage = async () => {
+  const protectedPackage = Boolean(period?.file_manifest?.length || period?.generated_at ||
+    period?.work_act_signed_at || period?.work_act_status === 'signed' ||
+    packageState?.inspection?.signed_at || packageState?.inspection?.status === 'signed')
+  const signedPackage = Boolean(period?.work_act_signed_at || period?.work_act_status === 'signed' ||
+    packageState?.inspection?.signed_at || packageState?.inspection?.status === 'signed')
+  const packageVersion = Math.max(0, ...(period?.file_manifest ?? []).map(item => item.version))
+
+  const displayPackage = (state: PackageState, month: string) => {
     if (!object.contract) return
-    packageForm.resetFields()
-    packageForm.setFieldsValue({
-      month: currentMonth,
-      inspection_date: today,
+    const now = new Date()
+    const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const reportValues = state.inspection ?? {
+      inspection_date: state.period ? null : localToday,
+      control_date: null,
       ksp_count: object.contract.default_ksp,
       derat_glue_count: object.contract.default_derat_glue,
       bait_count: object.contract.default_baits,
-      rodents_caught: 0,
-      deratization_result: 'not_required',
+      rodents_caught: 0, deratization_result: 'not_required',
       disinsection_glue_count: object.contract.default_disinsection_glue,
-      insects_caught: 0,
-      disinsection_result: 'not_required',
-      inspection_status: 'draft',
-      infestation_degree: 'начальная',
-      work_act_status: 'draft',
-      invoice_date: today,
-    })
-    const response = await fetch(`${API}/api/transactions`)
-    const rows = response.ok ? ((await response.json()) as Transaction[]) : []
-    setTransactions(
-      rows.filter(
-        (row) => row.kind === 'income' && !row.review_required && row.object_id === object.id,
-      ),
-    )
+      insects_caught: 0, disinsection_result: 'not_required', status: 'draft',
+    }
+    const values = {
+      ...reportValues,
+      ...(state.period ?? { infestation_degree: 'начальная', work_act_status: 'draft', invoice_date: localToday }),
+      inspection_status: reportValues.status,
+      extra_services: ((state.period?.extra_services as string[] | undefined) ?? []).join('\n'),
+      month,
+    }
+    packageForm.resetFields()
+    packageForm.setFieldsValue(values)
+    baseline.current = packageForm.getFieldsValue(true)
+    setPeriod(state.period)
+    setPackageState(state)
+    setLoadedMonth(month)
+    setEditConfirmed(false)
+  }
+
+  const loadPackage = async (month: string) => {
+    const requestId = ++packageRequest.current
+    setPackageState(null)
     setPeriod(null)
+    setLoadedMonth('')
+    setEditConfirmed(false)
+    if (!object.contract || !/^\d{4}-\d{2}$/.test(month)) return
+    setPackageBusy(true)
+    try {
+      const response = await fetch(`${API}/api/contracts/${object.contract.id}/package/${month}`)
+      if (!response.ok) throw new Error('Не удалось загрузить пакет')
+      const state = await response.json() as PackageState
+      if (requestId === packageRequest.current) displayPackage(state, month)
+    } catch {
+      if (requestId === packageRequest.current) message.error('Не удалось загрузить пакет. Повторите открытие формы.')
+    } finally {
+      if (requestId === packageRequest.current) setPackageBusy(false)
+    }
+  }
+
+  const openPackage = async () => {
+    packageForm.resetFields()
     setPackageOpen(true)
+    const now = new Date()
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    packageForm.setFieldValue('month', month)
+    void loadPackage(month)
+    try {
+      const response = await fetch(`${API}/api/transactions`)
+      const rows = response.ok ? ((await response.json()) as Transaction[]) : []
+      setTransactions(rows.filter(row => row.kind === 'income' && !row.review_required && row.object_id === object.id))
+    } catch { setTransactions([]) }
   }
 
   const savePackage = async (generate: boolean) => {
-    if (!object.contract) return
-    const values = await packageForm.validateFields()
-    const reportResponse = await fetch(
-      `${API}/api/contracts/${object.contract.id}/inspection-reports/${values.month}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inspection_date: values.inspection_date,
-          control_date: values.control_date || null,
-          ksp_count: Number(values.ksp_count),
-          derat_glue_count: Number(values.derat_glue_count),
-          bait_count: Number(values.bait_count),
-          rodents_caught: Number(values.rodents_caught),
-          deratization_result: values.deratization_result,
-          disinsection_glue_count: Number(values.disinsection_glue_count),
-          insects_caught: Number(values.insects_caught),
-          disinsection_result: values.disinsection_result,
-          status: values.inspection_status,
-          signed_at:
-            values.inspection_status === 'signed' ? new Date().toISOString() : null,
-        }),
-      },
-    )
-    if (!reportResponse.ok) return message.error('Не удалось сохранить обследование')
-    const periodResponse = await fetch(
-      `${API}/api/contracts/${object.contract.id}/periods/${values.month}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          preparations: values.preparations || null,
-          infestation_degree: values.infestation_degree,
-          extra_services: (values.extra_services || '')
-            .split(',')
-            .map((item: string) => item.trim())
-            .filter(Boolean),
-          invoice_number: values.invoice_number || undefined,
-          invoice_date: values.invoice_date || null,
-          work_act_status: values.work_act_status,
-          work_act_signed_at:
-            values.work_act_status === 'signed' ? new Date().toISOString() : null,
-          transaction_id: values.transaction_id || null,
-        }),
-      },
-    )
-    if (!periodResponse.ok) return message.error('Не удалось сохранить период')
-    let saved = (await periodResponse.json()) as Period
-    if (generate) {
-      const generated = await fetch(`${API}/api/contract-periods/${saved.id}/generate`, {
-        method: 'POST',
-      })
-      if (!generated.ok) return message.error('Не удалось сформировать DOCX')
-      saved = await generated.json()
-      message.success('Пакет сформирован')
-    } else {
-      message.success('Черновик сохранён')
+    if (!object.contract || !packageState || packageBusy) return
+    const currentValues = packageForm.getFieldsValue(true)
+    const unchanged = JSON.stringify(currentValues) === JSON.stringify(baseline.current)
+    const values = unchanged && packageState.period && packageState.inspection
+      ? currentValues : await packageForm.validateFields()
+    if (values.month !== loadedMonth) return message.error('Дождитесь загрузки выбранного месяца')
+    const inspection: Record<string, unknown> = {}
+    const periodPatch: Record<string, unknown> = {}
+    for (const [fields, target, existing] of [
+      [inspectionFields, inspection, packageState.inspection],
+      [periodFields, periodPatch, packageState.period],
+    ] as const) {
+      for (const field of fields) {
+        const formField = field === 'status' ? 'inspection_status' : field
+        const value = values[formField]
+        if (value === undefined || (existing && JSON.stringify(value) === JSON.stringify(baseline.current[formField]))) continue
+        target[field] = countFields.has(field) ? Number(value) : field === 'extra_services'
+          ? String(value).split('\n').map(item => item.trim()).filter(Boolean) : value === '' ? null : value
+      }
     }
-    setPeriod(saved)
-    packageForm.setFieldValue('invoice_number', saved.invoice_number)
-    loadTimeline()
+    if ('status' in inspection) inspection.signed_at = inspection.status === 'signed'
+      ? packageState.inspection?.signed_at ?? new Date().toISOString() : null
+    if ('work_act_status' in periodPatch) periodPatch.work_act_signed_at = periodPatch.work_act_status === 'signed'
+      ? period?.work_act_signed_at ?? new Date().toISOString() : null
+    const changed = Object.keys(inspection).length > 0 || Object.keys(periodPatch).length > 0
+    if (changed && protectedPackage && !editConfirmed) return message.error('Подтвердите правку пакета')
+    setPackageBusy(true)
+    try {
+      const response = await fetch(`${API}/api/contracts/${object.contract.id}/package/${loadedMonth}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inspection, period: periodPatch, expected_revision: packageState.revision,
+          confirm_edit: editConfirmed, generate }),
+      })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(typeof error.detail === 'string' ? error.detail : 'Не удалось сохранить пакет')
+      }
+      const saved = await response.json() as PackageState
+      displayPackage(saved, loadedMonth)
+      message.success(saved.revision === packageState.revision ? 'Изменений нет' : 'Пакет сохранён')
+      loadTimeline()
+    } catch (error) { message.error(error instanceof Error ? error.message : 'Не удалось сохранить пакет') }
+    finally { setPackageBusy(false) }
   }
 
   return (
     <>
+      {confirmationContext}
       <Card title="Документы" size="small">
         <Space orientation="vertical" style={{ width: '100%' }}>
           {object.contract ? (
@@ -358,16 +397,25 @@ export default function ContractPanel({
       <Modal
         title="Пакет за месяц"
         open={packageOpen}
-        onCancel={() => setPackageOpen(false)}
+        onCancel={() => { packageRequest.current += 1; setPackageOpen(false); setPackageBusy(false) }}
         footer={[
-          <Button key="save" onClick={() => savePackage(false)}>Сохранить черновик</Button>,
-          <Button key="generate" type="primary" onClick={() => savePackage(true)}>Сформировать DOCX</Button>,
+          <Button key="save" disabled={!packageState || packageBusy} onClick={() => savePackage(false)}>{protectedPackage ? 'Сохранить пакет' : 'Сохранить черновик'}</Button>,
+          <Button key="generate" disabled={!packageState || packageBusy} type="primary" onClick={() => savePackage(true)}>Сформировать DOCX</Button>,
         ]}
         width={760}
         forceRender
       >
-        <Form form={packageForm} layout="vertical" className="contract-package-form">
-          <Form.Item name="month" label="Месяц" rules={[{ required: true }]}><Input type="month" /></Form.Item>
+        {protectedPackage ? <Alert type="warning" showIcon
+          title={`${signedPackage ? 'Подписано. ' : ''}${packageVersion ? `Сформированы документы версии v${packageVersion}` : 'Пакет защищён от случайной правки'}`}
+          description="Изменения потребуют новой версии документов. Предыдущие файлы сохраняются."
+          action={<Button disabled={packageBusy || editConfirmed} onClick={() => confirmationModal.confirm({
+            title: 'Подтвердить правку пакета?',
+            content: 'После сохранения изменений будет сформирована новая версия DOCX. Проверьте статус подписей перед сохранением.',
+            okText: 'Подтверждаю правку', cancelText: 'Отмена', onOk: () => setEditConfirmed(true),
+          })}>Разрешить правку</Button>} /> : null}
+        <Form form={packageForm} layout="vertical" className="contract-package-form"
+          disabled={packageBusy || !packageState || (protectedPackage && !editConfirmed)}>
+          <Form.Item name="month" label="Месяц" rules={[{ required: true }]}><Input type="month" disabled={packageBusy} onChange={event => void loadPackage(event.target.value)} /></Form.Item>
           <Form.Item name="inspection_date" label="Дата обследования" rules={[{ required: true }]}><Input type="date" /></Form.Item>
           <Form.Item name="control_date" label="Контрольная дата"><Input type="date" /></Form.Item>
           <Form.Item name="ksp_count" label="КСП"><Input type="number" min={0} /></Form.Item>
@@ -381,7 +429,7 @@ export default function ContractPanel({
           <Form.Item name="inspection_status" label="Статус акта осмотра"><Select options={[{ value: 'draft', label: 'Черновик' }, { value: 'signed', label: 'Подписан' }]} /></Form.Item>
           <Form.Item name="preparations" label="Препараты"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="infestation_degree" label="Степень заражения"><Input /></Form.Item>
-          <Form.Item name="extra_services" label="Дополнительные услуги"><Input placeholder="Через запятую" /></Form.Item>
+          <Form.Item name="extra_services" label="Дополнительные услуги"><Input.TextArea placeholder="Каждая услуга с новой строки" /></Form.Item>
           <Form.Item name="invoice_number" label="Номер счёта"><Input placeholder="Система предложит следующий номер" /></Form.Item>
           <Form.Item name="invoice_date" label="Дата счёта"><Input type="date" /></Form.Item>
           <Form.Item name="work_act_status" label="Статус акта выполненных работ"><Select options={[{ value: 'draft', label: 'Черновик' }, { value: 'signed', label: 'Подписан' }]} /></Form.Item>

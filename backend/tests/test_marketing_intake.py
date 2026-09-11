@@ -68,6 +68,7 @@ class MarketingIntakeTest(unittest.TestCase):
         with Session(self.engine) as session:
             draft = session.scalar(select(TelegramClientDraft))
             self.assertIsNotNone(draft)
+            assert draft is not None
             self.assertNotEqual(draft.encrypted_payload, "")
         self.assertEqual(
             purge_expired_client_drafts(self.engine, now=self.now + timedelta(days=2)),

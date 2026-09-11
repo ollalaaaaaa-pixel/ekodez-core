@@ -114,6 +114,14 @@ class ContractPeriodOut(BaseModel):
     file_manifest: list[dict[str, object]]
 
 
+class PackageEditIn(BaseModel):
+    inspection: InspectionReportIn = Field(default_factory=InspectionReportIn)
+    period: ContractPeriodIn = Field(default_factory=ContractPeriodIn)
+    expected_revision: str
+    confirm_edit: bool = False
+    generate: bool = False
+
+
 def month_start(value: date) -> date:
     return value.replace(day=1)
 

@@ -44,6 +44,7 @@ class MarketingMetricsTest(unittest.TestCase):
         )
         with Session(self.engine) as s:
             expense = s.get(Transaction, entry.id)
+            assert expense is not None
             self.assertEqual(expense.channel, "ВК")
             s.add(Lead(source="yandex_direct", created_at=datetime(2026, 9, 8, 12)))
             s.commit()
