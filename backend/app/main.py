@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from datetime import UTC, date, datetime, timedelta
@@ -45,6 +46,7 @@ from app.contracts import (
     DocumentProfileIn,
     InspectionReportIn,
     InspectionReportOut,
+    PackageEditIn,
     get_or_create_period,
     parse_month,
     serialize_billing_client,
@@ -896,6 +898,39 @@ def _contract_or_404(session: Session, contract_id: int) -> Contract:
     return contract
 
 
+def _guard_legacy_package_edit(
+    session: Session,
+    contract_id: int,
+    month: date,
+    row: InspectionReport | ContractPeriod | None,
+    payload: InspectionReportIn | ContractPeriodIn,
+) -> None:
+    # Linking an existing payment is bookkeeping, not a document-content edit.
+    fields = payload.model_fields_set - {"transaction_id"}
+    if not fields or (
+        row is not None
+        and all(getattr(row, field) == getattr(payload, field) for field in fields)
+    ):
+        return
+    period, report = _package_rows(session, contract_id, month)
+    if (
+        period
+        and (
+            period.file_manifest
+            or period.generated_at
+            or period.work_act_signed_at
+            or period.work_act_status == "signed"
+        )
+    ) or (report and (report.signed_at or report.status == "signed")):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Используйте форму пакета с подтверждением правки "
+                "и созданием новой версии."
+            ),
+        )
+
+
 @app.post(
     "/api/contracts/{contract_id}/inspection-reports/{period}",
     response_model=InspectionReportOut,
@@ -913,6 +948,7 @@ def save_inspection_report(contract_id: int, period: str, payload: InspectionRep
                 InspectionReport.report_month == report_month,
             )
         )
+        _guard_legacy_package_edit(session, contract_id, report_month, row, payload)
         if row is None:
             row = InspectionReport(
                 contract=contract,
@@ -977,6 +1013,7 @@ def save_contract_period(contract_id: int, period: str, payload: ContractPeriodI
             row = get_or_create_period(session, contract, period_month)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        _guard_legacy_package_edit(session, contract_id, period_month, row, payload)
         _apply_period_input(session, row, payload)
         session.commit()
         session.refresh(row)
@@ -989,6 +1026,9 @@ def update_contract_period(period_id: int, payload: ContractPeriodIn):
         row = session.get(ContractPeriod, period_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        _guard_legacy_package_edit(
+            session, row.contract_id, row.period_month, row, payload
+        )
         _apply_period_input(session, row, payload)
         try:
             session.commit()
@@ -999,6 +1039,202 @@ def update_contract_period(period_id: int, payload: ContractPeriodIn):
                 status_code=409, detail="constraint violation"
             ) from error
         return serialize_period(row)
+
+
+def _package_state(
+    period: ContractPeriod | None, report: InspectionReport | None
+) -> dict[str, object]:
+    state = {
+        "period": serialize_period(period).model_dump(mode="json") if period else None,
+        "inspection": (
+            serialize_inspection(report).model_dump(mode="json") if report else None
+        ),
+    }
+    revision = hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
+    return {**state, "revision": revision}
+
+
+def _package_rows(session: Session, contract_id: int, month: date):
+    period = session.scalar(
+        select(ContractPeriod).where(
+            ContractPeriod.contract_id == contract_id,
+            ContractPeriod.period_month == month,
+        )
+    )
+    report = session.scalar(
+        select(InspectionReport).where(
+            InspectionReport.contract_id == contract_id,
+            InspectionReport.report_month == month,
+        )
+    )
+    return period, report
+
+
+@app.get("/api/contracts/{contract_id}/package/{month}")
+def read_monthly_package(contract_id: int, month: str):
+    try:
+        parsed = parse_month(month)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with Session(engine) as session:
+        _contract_or_404(session, contract_id)
+        return _package_state(*_package_rows(session, contract_id, parsed))
+
+
+@app.patch("/api/contracts/{contract_id}/package/{month}")
+def edit_monthly_package(
+    contract_id: int, month: str, payload: PackageEditIn, request: Request
+):
+    if not request.client or request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(
+            status_code=403, detail="Редактирование пакета доступно только с localhost"
+        )
+    try:
+        parsed = parse_month(month)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with Session(engine) as session:
+        # Serialize the read/check/write sequence, including version allocation.
+        if session.bind is not None and session.bind.dialect.name == "sqlite":
+            session.execute(text("BEGIN IMMEDIATE"))
+        contract = _contract_or_404(session, contract_id)
+        period, report = _package_rows(session, contract_id, parsed)
+        state = _package_state(period, report)
+        if payload.expected_revision != state["revision"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Пакет изменён. Загрузите актуальные данные заново.",
+            )
+        changed = (
+            period is None
+            or report is None
+            or any(
+                getattr(row, field) != getattr(patch, field)
+                for row, patch in (
+                    (period, payload.period),
+                    (report, payload.inspection),
+                )
+                if row is not None
+                for field in patch.model_fields_set
+            )
+        )
+        protected = bool(
+            period
+            and (
+                period.file_manifest
+                or period.generated_at
+                or period.work_act_signed_at
+                or period.work_act_status == "signed"
+            )
+            or report
+            and (report.signed_at or report.status == "signed")
+        )
+        if changed and protected and not payload.confirm_edit:
+            raise HTTPException(
+                status_code=409,
+                detail="Подтвердите изменение сформированного или подписанного пакета.",
+            )
+        if not changed and (not payload.generate or protected):
+            return state
+        if period is None:
+            try:
+                period = get_or_create_period(session, contract, parsed)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        if report is None:
+            report = InspectionReport(
+                contract=contract,
+                report_month=parsed,
+                ksp_count=contract.default_ksp,
+                derat_glue_count=contract.default_derat_glue,
+                bait_count=contract.default_baits,
+                rodents_caught=0,
+                deratization_result="not_required",
+                disinsection_glue_count=contract.default_disinsection_glue,
+                insects_caught=0,
+                disinsection_result="not_required",
+                status="draft",
+            )
+            session.add(report)
+        for field in payload.inspection.model_fields_set:
+            value = getattr(payload.inspection, field)
+            if value is None and field not in {
+                "inspection_date",
+                "control_date",
+                "signed_at",
+            }:
+                raise HTTPException(status_code=422, detail=f"{field} cannot be null")
+            setattr(report, field, value)
+        if report.status == "signed" and report.signed_at is None:
+            raise HTTPException(
+                status_code=422, detail="signed inspection requires signed_at"
+            )
+        _apply_period_input(session, period, payload.period)
+        manifest = None
+        try:
+            session.flush()
+            if payload.generate or (changed and protected):
+                service_object = contract.object
+                client = (
+                    session.scalar(
+                        select(Client)
+                        .where(Client.object_id == service_object.id)
+                        .order_by(Client.id)
+                        .limit(1)
+                    )
+                    if service_object
+                    else None
+                )
+                if service_object is None or client is None:
+                    raise DocumentTemplateError(
+                        "inspection and billing client are required"
+                    )
+                values = _package_values(
+                    service_object,
+                    contract,
+                    report,
+                    period,
+                    decrypt_sensitive_mapping(client.encrypted_requisites),
+                )
+                manifest = build_month_package(
+                    template_dir=DOCUMENT_TEMPLATE_DIR,
+                    output_root=DOCUMENT_OUTPUT_ROOT,
+                    object_name=service_object.name,
+                    period_month=period.period_month,
+                    paid_service_due=period.paid_service_due,
+                    values=values,
+                    minimum_version=max(
+                        (
+                            int(str(item.get("version", 0)))
+                            for item in period.file_manifest
+                        ),
+                        default=0,
+                    )
+                    + 1,
+                )
+                period.generated_at = datetime.now(UTC)
+                period.file_manifest = [
+                    {
+                        "version": manifest.version,
+                        "kind": item.kind,
+                        "name": item.name,
+                        "size": item.size,
+                        "sha256": item.sha256,
+                    }
+                    for item in manifest.files
+                ]
+            session.commit()
+        except (ValueError, IntegrityError) as error:
+            session.rollback()
+            # Do not erase previous versions; an unreferenced new directory is
+            # retained for recovery if committing the manifest failed.
+            raise HTTPException(
+                status_code=422,
+                detail="Не удалось сохранить пакет; данные не изменены.",
+            ) from error
+        session.refresh(period)
+        session.refresh(report)
+        return _package_state(period, report)
 
 
 @app.get("/api/objects/{object_id}/contract-timeline")

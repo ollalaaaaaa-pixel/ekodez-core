@@ -174,6 +174,7 @@ def build_month_package(
     period_month: date,
     paid_service_due: bool,
     values: dict[str, str],
+    minimum_version: int = 1,
 ) -> PackageManifest:
     selected = ["inspection"]
     if paid_service_due:
@@ -189,6 +190,7 @@ def build_month_package(
         object_name=object_name,
         period_month=period_month,
         documents=documents,
+        minimum_version=minimum_version,
     )
 
 
@@ -199,6 +201,7 @@ def build_document_package(
     object_name: str,
     period_month: date,
     documents: tuple[PackageDocument, ...],
+    minimum_version: int = 1,
 ) -> PackageManifest:
     sources = {
         index: template_dir / TEMPLATES[item.kind][0]
@@ -218,7 +221,7 @@ def build_document_package(
     root = output_root.resolve()
     parent = root / period_month.strftime("%Y-%m") / _safe_component(object_name)
     parent.mkdir(parents=True, exist_ok=True)
-    version = _next_version(parent)
+    version = max(_next_version(parent), minimum_version)
     final_directory = parent / f"v{version}"
     temporary = Path(tempfile.mkdtemp(prefix=".package-", dir=parent))
     try:
