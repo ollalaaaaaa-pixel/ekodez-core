@@ -74,9 +74,16 @@ def clients_router(get_engine: Callable[[], Engine]) -> APIRouter:
             contracts: list[Contract] = [
                 obj.contract for obj in objects if obj.contract
             ]
+            object_ids = [obj.id for obj in objects]
             transactions = session.scalars(
                 select(Transaction)
-                .where(Transaction.object_id.in_([obj.id for obj in objects]))
+                .where(
+                    (Transaction.client_id == row.id)
+                    | (
+                        Transaction.client_id.is_(None)
+                        & Transaction.object_id.in_(object_ids)
+                    )
+                )
                 .order_by(Transaction.operation_date.desc(), Transaction.id.desc())
             ).all()
             return {
@@ -105,6 +112,8 @@ def clients_router(get_engine: Callable[[], Engine]) -> APIRouter:
                         "amount": f"{tx.amount:.2f}",
                         "kind": tx.kind,
                         "category": tx.category,
+                        "client_id": tx.client_id,
+                        "tags": tx.tags or [],
                     }
                     for tx in transactions
                 ],

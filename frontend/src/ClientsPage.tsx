@@ -31,7 +31,6 @@ export default function ClientsPage() {
     return () => { clearTimeout(timer); controller.abort() }
   }, [query, type])
   useEffect(() => {
-    setCard(null)
     if (selected === null) return
     const controller = new AbortController()
     fetch(`${API}/api/clients/${selected}`, { signal: controller.signal })
@@ -53,7 +52,7 @@ export default function ClientsPage() {
       <Input.Search aria-label="Поиск клиентов" placeholder="Название или маскированный ИНН" value={query} onChange={e => setQuery(e.target.value)} allowClear />
       <Select aria-label="Тип клиента" placeholder="Юрлица и ИП" allowClear value={type} onChange={setType} style={{ width: 180 }} options={[{ value: 'legal_entity', label: 'Юрлица' }, { value: 'sole_proprietor', label: 'ИП' }]} />
     </Space>
-    <Table rowKey="id" loading={loading} dataSource={rows} columns={[{ title: 'Название', render: (_, row) => <a onClick={() => setSelected(row.id)}>{row.name}</a> }, ...columns({ inn: 'ИНН', legal_address: 'Адрес', active_contracts: 'Активных договоров' })]} />
+    <Table rowKey="id" loading={loading} dataSource={rows} columns={[{ title: 'Название', render: (_, row) => <a onClick={() => { setCard(null); setSelected(row.id) }}>{row.name}</a> }, ...columns({ inn: 'ИНН', legal_address: 'Адрес', active_contracts: 'Активных договоров' })]} />
     <Drawer title={card?.name ?? 'Карточка клиента'} open={selected !== null} onClose={() => setSelected(null)} size="large" loading={!card}>
       {card && <Tabs items={[{ key: 'requisites', label: 'Реквизиты', children: <Descriptions column={1} items={[{ key: 'inn', label: 'ИНН', children: card.inn ?? '—' }, { key: 'address', label: 'Адрес', children: card.legal_address ?? '—' }, ...Object.entries(card.requisites).map(([key, value]) => ({ key, label: labels[key], children: value ?? '—' }))]} /> }, ...tables]} />}
     </Drawer>

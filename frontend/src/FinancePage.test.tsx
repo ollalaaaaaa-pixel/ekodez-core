@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import FinancePage from './FinancePage'
 
+vi.mock('./useIncomeCategories', () => ({ useIncomeCategories: () => ['Другие работы', 'Плесень', 'Дезинсекция', 'Юридические клиенты'] }))
+
 const jsonResponse = (body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
 

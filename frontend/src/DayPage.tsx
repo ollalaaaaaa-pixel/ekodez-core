@@ -7,7 +7,8 @@ import { ArrowRightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/ico
 import dayjs from 'dayjs'
 import './DayPage.css'
 import { API } from './api'
-import { INCOME_CATEGORIES, LEAD_SOURCES } from './dictionaries'
+import { LEAD_SOURCES } from './dictionaries'
+import { useIncomeCategories } from './useIncomeCategories'
 import { validateDayEntry } from './dayEntryValidation'
 
 const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафан', 'Прочее'] as const
@@ -39,6 +40,7 @@ const money = (value: string | number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
 
 export default function DayPage({ onNavigate }: { onNavigate: (screen: string) => void }) {
+  const INCOME_CATEGORIES = useIncomeCategories()
   const today = dayjs().format('YYYY-MM-DD')
   const [selectedDate, setSelectedDate] = useState(today)
   const [enteredBy, setEnteredBy] = useState('Артем')

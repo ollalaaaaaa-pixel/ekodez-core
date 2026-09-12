@@ -54,3 +54,32 @@ class ClientsMigrationTest(unittest.TestCase):
                         "object_id",
                         [row[1] for row in db.execute("PRAGMA table_info(clients)")],
                     )
+                    db.execute(
+                        "INSERT INTO transactions (id,source,operation_date,amount,"
+                        "currency,kind,category,object_id,review_required) "
+                        "VALUES (42,'manual','2026-08-01',12.34,'RUB','expense',"
+                        "'Материалы и химия',1,0)"
+                    )
+                    db.commit()
+                command.upgrade(config, "e0a4c7b9d125")
+                with closing(sqlite3.connect(path)) as db:
+                    mapping = db.execute(
+                        "SELECT category_id FROM bank_category_mappings "
+                        "WHERE kind='expense' AND legacy_title='Материалы и химия'"
+                    ).fetchone()[0]
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT client_id, category_id, tags, amount "
+                            "FROM transactions WHERE id=42"
+                        ).fetchone(),
+                        (7, mapping, "[]", 12.34),
+                    )
+                    mismatches = db.execute(
+                        "SELECT count(*) FROM bank_category_mappings m "
+                        "JOIN transaction_categories c ON c.id=m.category_id "
+                        "WHERE m.kind != c.kind OR m.legacy_title != c.title"
+                    ).fetchone()[0]
+                    self.assertEqual(mismatches, 0)
+                    self.assertEqual(
+                        db.execute("PRAGMA foreign_key_check").fetchall(), []
+                    )

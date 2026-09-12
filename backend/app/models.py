@@ -39,6 +39,13 @@ class Transaction(Base):
     counterparty: Mapped[str | None] = mapped_column(String(300), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transaction_categories.id"), nullable=True, index=True
+    )
+    client_id: Mapped[int | None] = mapped_column(
+        ForeignKey("clients.id"), nullable=True, index=True
+    )
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     marketing_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     entered_by: Mapped[str] = mapped_column(String(50), default="Артем")
@@ -72,6 +79,27 @@ class ExpenseCategory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class TransactionCategory(Base):
+    __tablename__ = "transaction_categories"
+    __table_args__ = (
+        UniqueConstraint("kind", "title", name="uq_category_kind_title"),
+        CheckConstraint("kind IN ('income', 'expense')", name="ck_category_kind"),
+        CheckConstraint("sort_order >= 0", name="ck_category_sort_order"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(20))
+    sort_order: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class BankCategoryMapping(Base):
+    __tablename__ = "bank_category_mappings"
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    legacy_title: Mapped[str] = mapped_column(String(100), primary_key=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("transaction_categories.id"))
 
 
 class Contract(Base):

@@ -95,6 +95,7 @@ from app.models import (
     Lead,
     Object,
     Transaction,
+    TransactionCategory,
     Treatment,
 )
 from app.objects import (
@@ -131,6 +132,7 @@ from app.security.pii import (
 )
 from app.security.pii_retention import RetentionWorker
 from app.tg_poller import poller_started, start_poller
+from app.transaction_categories import categories_router, category_titles
 
 load_dotenv()
 
@@ -144,6 +146,7 @@ engine = create_app_engine(DATABASE_URL)
 
 app = FastAPI(title="Ekodez Core")
 app.include_router(clients_router(lambda: engine))
+app.include_router(categories_router(lambda: engine))
 
 app.add_middleware(
     CORSMiddleware,
@@ -184,6 +187,8 @@ class TransactionIn(BaseModel):
     kind: str = "unknown"
     review_required: bool = True
     object_id: int | None = None
+    client_id: int | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class TransactionOut(BaseModel):
@@ -197,6 +202,7 @@ class TransactionOut(BaseModel):
     counterparty: str | None
     description: str | None
     category: str | None
+    category_id: int | None
     channel: str | None
     marketing_source: str | None
     kind: str
@@ -204,6 +210,8 @@ class TransactionOut(BaseModel):
     object_id: int | None
     lead_id: int | None
     object_name: str | None
+    client_id: int | None
+    tags: list[str]
 
 
 class FinanceSummary(BaseModel):
@@ -229,6 +237,8 @@ class TransactionPatchIn(BaseModel):
     category: str | None = None
     description: str | None = None
     marketing_source: str | None = None
+    client_id: int | None = None
+    tags: list[str] | None = None
 
     @field_validator("operation_date")
     @classmethod
@@ -1875,6 +1885,7 @@ def _transaction_out(session: Session, row: Transaction) -> TransactionOut:
         counterparty=row.counterparty,
         description=row.description,
         category=row.category,
+        category_id=row.category_id,
         channel=row.channel,
         marketing_source=row.marketing_source,
         kind=row.kind,
@@ -1882,6 +1893,8 @@ def _transaction_out(session: Session, row: Transaction) -> TransactionOut:
         object_id=row.object_id,
         lead_id=row.lead_id,
         object_name=object_name,
+        client_id=row.client_id,
+        tags=row.tags or [],
     )
 
 
@@ -1913,6 +1926,11 @@ def create_transaction(payload: TransactionIn):
         values["object_id"] = _validated_transaction_object(
             session, payload.kind, payload.object_id
         )
+        if (
+            payload.client_id is not None
+            and session.get(Client, payload.client_id) is None
+        ):
+            raise HTTPException(status_code=404, detail="client not found")
         finance_text = f"{payload.description or ''} {payload.counterparty or ''}"
         values["category"] = classify_finance(finance_text) or default_finance_category(
             payload.kind
@@ -1956,25 +1974,35 @@ def update_transaction(tx_id: int, payload: TransactionPatchIn):
         raise HTTPException(status_code=422, detail="operation date cannot be null")
     if "category" in changes and changes["category"] is None:
         raise HTTPException(status_code=422, detail="category cannot be null")
+    if "tags" in changes:
+        tags = changes["tags"]
+        if (
+            tags is None
+            or len(tags) > 20
+            or any(not tag.strip() or len(tag) > 100 for tag in tags)
+        ):
+            raise HTTPException(
+                422, "Укажите до 20 непустых тегов, не длиннее 100 символов"
+            )
+        changes["tags"] = list(dict.fromkeys(tag.strip() for tag in tags))
 
     with Session(engine) as session:
         row = session.get(Transaction, tx_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        if (
+            "client_id" in changes
+            and changes["client_id"] is not None
+            and session.get(Client, changes["client_id"]) is None
+        ):
+            raise HTTPException(status_code=404, detail="client not found")
         if "category" in changes:
             category = changes["category"]
-            if row.kind == "income":
-                if category not in INCOME_CATEGORIES_V1:
-                    raise HTTPException(status_code=422, detail="bad income category")
-            elif row.kind == "expense":
-                expense_category = session.scalar(
-                    select(ExpenseCategory).where(
-                        ExpenseCategory.name == category,
-                        ExpenseCategory.is_active == True,
-                    )
-                )
-                if expense_category is None:
-                    raise HTTPException(status_code=422, detail="bad expense category")
+            if row.kind in ("income", "expense"):
+                if category != row.category and category not in category_titles(
+                    session, row.kind
+                ):
+                    raise HTTPException(status_code=422, detail="bad category")
             else:
                 raise HTTPException(
                     status_code=422,
@@ -2231,6 +2259,18 @@ def dashboard_analytics(start_date: date = Query(), end_date: date = Query()):
 @app.get("/api/expense-categories", response_model=list[ExpenseCategoryOut])
 def list_expense_categories():
     with Session(engine) as session:
+        if session.scalar(select(TransactionCategory.id).limit(1)) is not None:
+            return [
+                {"id": row.id, "name": row.title, "is_active": row.is_active}
+                for row in session.scalars(
+                    select(TransactionCategory)
+                    .where(
+                        TransactionCategory.kind == "expense",
+                        TransactionCategory.is_active.is_(True),
+                    )
+                    .order_by(TransactionCategory.sort_order, TransactionCategory.id)
+                )
+            ]
         return session.scalars(
             select(ExpenseCategory)
             .where(ExpenseCategory.is_active == True)
@@ -2275,6 +2315,20 @@ def create_expense_category(payload: ExpenseCategoryIn):
             raise HTTPException(status_code=400, detail="category already exists")
 
         row = ExpenseCategory(name=name)
+        if session.scalar(select(TransactionCategory.id).limit(1)) is not None:
+            if (
+                session.scalar(
+                    select(TransactionCategory.id).where(
+                        TransactionCategory.kind == "expense",
+                        TransactionCategory.title == name,
+                    )
+                )
+                is not None
+            ):
+                raise HTTPException(400, "category already exists")
+            session.add(
+                TransactionCategory(title=name, kind="expense", sort_order=1000)
+            )
         session.add(row)
         try:
             session.commit()
@@ -2358,11 +2412,7 @@ def bank_confirm(payload: BankConfirmIn):
     statement_amounts = {"income": zero, "expense": zero}
 
     with Session(engine) as session, session.begin():
-        active_expense_categories = set(
-            session.scalars(
-                select(ExpenseCategory.name).where(ExpenseCategory.is_active == True)
-            ).all()
-        )
+        active_expense_categories = set(category_titles(session, "expense"))
         processed: list[tuple[BankRow, ClassificationResult, str | None]] = []
         for item in payload.transactions:
             row = _bank_row(item)
@@ -2382,7 +2432,7 @@ def bank_confirm(payload: BankConfirmIn):
                         status_code=422, detail="review decision required"
                     )
                 allowed_categories = (
-                    set(INCOME_CATEGORIES_V1)
+                    set(category_titles(session, "income"))
                     if classification.kind == "income"
                     else active_expense_categories
                 )
@@ -2482,14 +2532,7 @@ def get_day(day: date = Query(alias="date")):
             )
             .order_by(Transaction.created_at, Transaction.id)
         ).all()
-        active_expense_categories = [
-            row.name
-            for row in session.scalars(
-                select(ExpenseCategory)
-                .where(ExpenseCategory.is_active == True)
-                .order_by(ExpenseCategory.id)
-            ).all()
-        ]
+        active_expense_categories = category_titles(session, "expense")
 
         income_total = sum(
             (row.amount for row in rows if row.kind == "income"), Decimal("0")
@@ -2498,7 +2541,7 @@ def get_day(day: date = Query(alias="date")):
             (row.amount for row in rows if row.kind == "expense"), Decimal("0")
         )
         category_pairs = [
-            *(("income", category) for category in INCOME_CATEGORIES_V1),
+            *(("income", category) for category in category_titles(session, "income")),
             *(("expense", category) for category in active_expense_categories),
         ]
         for row in rows:
@@ -2564,23 +2607,14 @@ def create_day_entry(payload: DayEntryIn):
         )
     if payload.kind not in ("income", "expense"):
         raise HTTPException(status_code=422, detail="bad kind")
-    if payload.kind == "income" and payload.category not in INCOME_CATEGORIES_V1:
-        raise HTTPException(status_code=422, detail="bad category")
     if payload.kind == "expense" and payload.object_id is not None:
         raise HTTPException(status_code=422, detail="only income can link object")
     if payload.amount < 0:
         raise HTTPException(status_code=422, detail="bad amount")
 
     with Session(engine) as session:
-        if payload.kind == "expense":
-            expense_category = session.scalar(
-                select(ExpenseCategory).where(
-                    ExpenseCategory.name == payload.category,
-                    ExpenseCategory.is_active == True,
-                )
-            )
-            if expense_category is None:
-                raise HTTPException(status_code=422, detail="bad category")
+        if payload.category not in category_titles(session, payload.kind):
+            raise HTTPException(status_code=422, detail="bad category")
         row = Transaction(
             source="manual",
             operation_date=payload.entry_date or date.today(),

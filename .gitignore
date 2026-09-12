@@ -1,4 +1,9 @@
 .venv/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.bak
 __pycache__/
 *.pyc
 .env
