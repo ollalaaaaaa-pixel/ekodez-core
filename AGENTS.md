@@ -50,3 +50,18 @@ Backend запускать из каталога `backend` командой
 аудит сайта, анализ ЦА/конкурентов) сначала читай
 `docs/marketing/prompt-library.md` и выполняй соответствующий адаптированный
 промт; с нуля не сочинять. Полную библиотеку в `AGENTS.md` не копировать.
+
+## 6. Индекс Codex Skills Pack 1
+
+Перед задачей соответствующей области сессия ОБЯЗАНА прочитать указанный
+`.codex/skills/<имя>/SKILL.md` и указать в отчёте применённый навык.
+
+- `sqlite-safe-migration` — резервная копия, SHA-256, integrity_check и Alembic/SQLite.
+- `service-restart-runbook` — безопасный рестарт EkodezBackend/EkodezFrontend и health-проверки.
+- `pii-and-reveal-guard` — шифрование, маскирование, reveal/426, аудит и retention.
+- `docx-package-acceptance` — приёмка и визуальная проверка DOCX-пакетов.
+- `tg-bot-default-deny` — allowlist-роли, клиентский default-deny и rate-limit.
+- `marketing-content-rules` — цены владельца, обезличенный контент и проверка юридических формулировок.
+- `read-only-review` — аудит без правок, запрещённые файлы, heads и READY/расхождения.
+- `docx-template-edit` — версионирование шаблонов и проверки генерации.
+- `owner-approval-gate` — граница команд «применяй», «далее», «запускай», «закоммить и отправь».
