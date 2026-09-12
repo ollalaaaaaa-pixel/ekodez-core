@@ -139,6 +139,9 @@ class Object(Base):
     contract_id: Mapped[int | None] = mapped_column(
         ForeignKey("contracts.id"), nullable=True, unique=True
     )
+    client_id: Mapped[int | None] = mapped_column(
+        ForeignKey("clients.id"), nullable=True, index=True
+    )
     risk_points: Mapped[list[str]] = mapped_column(JSON, default=list)
     last_treatment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     next_treatment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -148,7 +151,7 @@ class Object(Base):
     )
 
     contract: Mapped[Contract | None] = relationship(back_populates="object")
-    clients: Mapped[list["Client"]] = relationship(back_populates="object")
+    client: Mapped["Client | None"] = relationship(back_populates="objects")
     treatments: Mapped[list["Treatment"]] = relationship(back_populates="object")
 
 
@@ -284,12 +287,11 @@ class Client(Base):
     legal_address_masked: Mapped[str | None] = mapped_column(String(500), nullable=True)
     bank_details_masked: Mapped[str | None] = mapped_column(Text, nullable=True)
     encrypted_requisites: Mapped[str | None] = mapped_column(Text, nullable=True)
-    object_id: Mapped[int] = mapped_column(ForeignKey("objects.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    object: Mapped[Object] = relationship(back_populates="clients")
+    objects: Mapped[list[Object]] = relationship(back_populates="client")
 
 
 class InspectionReport(Base):

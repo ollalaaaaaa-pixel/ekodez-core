@@ -73,7 +73,7 @@ class AutoContractPackagesTest(unittest.TestCase):
                 Client(
                     name="ТЕСТ клиент",
                     client_type=client_type,
-                    object_id=service_object.id,
+                    objects=[service_object],
                 )
             )
         session.flush()

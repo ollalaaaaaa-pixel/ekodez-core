@@ -16,6 +16,7 @@ import LeadsPage from './LeadsPage'
 import ObjectsPage from './ObjectsPage'
 import InventoryPage from './InventoryPage'
 import DashboardPage from './DashboardPage'
+import ClientsPage from './ClientsPage'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -74,6 +75,8 @@ export default function App() {
             <InventoryPage />
           ) : current === 'dashboard' ? (
             <DashboardPage />
+          ) : current === 'clients' ? (
+            <ClientsPage />
           ) : (
             <Card>
               <p>Экран «{screens[current]}» готовится. Данные появятся после подключения модуля.</p>

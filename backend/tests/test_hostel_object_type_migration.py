@@ -52,7 +52,7 @@ class HostelObjectTypeMigrationTest(unittest.TestCase):
                     )
                     self.assertEqual(
                         connection.execute(
-                            text("SELECT object_id FROM clients")
+                            text("SELECT client_id FROM objects WHERE id = 1")
                         ).scalar_one(),
                         1,
                     )

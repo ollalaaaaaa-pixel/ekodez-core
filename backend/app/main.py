@@ -38,6 +38,7 @@ from app.bank_import import (
 )
 from app.business_calendar import CalendarRangeError, add_business_days
 from app.channels import CHANNELS
+from app.clients_showcase import clients_router
 from app.contracts import (
     BillingClientIn,
     BillingClientOut,
@@ -142,6 +143,7 @@ DOCUMENT_TEMPLATE_DIR = Path(__file__).parents[2] / "docs" / "templates"
 engine = create_app_engine(DATABASE_URL)
 
 app = FastAPI(title="Ekodez Core")
+app.include_router(clients_router(lambda: engine))
 
 app.add_middleware(
     CORSMiddleware,
@@ -647,6 +649,7 @@ def create_object(payload: ObjectIn):
             status_code=503, detail="PII encryption unavailable"
         ) from error
     row = Object(
+        client_id=payload.client_id,
         name=payload.name.strip(),
         address=stored_address,
         encrypted_address=encrypted_address,
@@ -795,7 +798,7 @@ def delete_object(object_id: int):
         row = session.get(Object, object_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
-        if row.clients or row.treatments:
+        if row.client is not None or row.treatments:
             raise HTTPException(status_code=409, detail="object has related records")
         linked_lead = session.scalar(select(Lead.id).where(Lead.object_id == row.id))
         if linked_lead is not None:
@@ -841,13 +844,15 @@ def save_billing_client(object_id: int, payload: BillingClientIn):
             raise HTTPException(status_code=404, detail="not found")
         row = session.scalar(
             select(Client)
-            .where(Client.object_id == object_id)
+            .join(Object, Object.client_id == Client.id)
+            .where(Object.id == object_id)
             .order_by(Client.id)
             .limit(1)
         )
         if row is None:
-            row = Client(name=payload.name, object_id=object_id)
+            row = Client(name=payload.name)
             session.add(row)
+            service_object.client = row
         row.client_type = payload.client_type
         row.name = (
             mask_name(payload.name)
@@ -867,7 +872,7 @@ def save_billing_client(object_id: int, payload: BillingClientIn):
         row.encrypted_requisites = encrypted
         session.commit()
         session.refresh(row)
-        return serialize_billing_client(row)
+        return serialize_billing_client(row, object_id=object_id)
 
 
 @app.get("/api/objects/{object_id}/billing-client", response_model=BillingClientOut)
@@ -877,14 +882,15 @@ def get_billing_client(
     with Session(engine) as session:
         row = session.scalar(
             select(Client)
-            .where(Client.object_id == object_id)
+            .join(Object, Object.client_id == Client.id)
+            .where(Object.id == object_id)
             .order_by(Client.id)
             .limit(1)
         )
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
         if not show_pii:
-            return serialize_billing_client(row)
+            return serialize_billing_client(row, object_id=object_id)
         client_host = request.client.host if request.client else ""
         if client_host not in ("127.0.0.1", "::1"):
             raise HTTPException(status_code=403, detail="PII reveal is localhost only")
@@ -904,7 +910,7 @@ def get_billing_client(
                 ensure_ascii=False,
             )
         )
-        return serialize_billing_client(row, values)
+        return serialize_billing_client(row, values, object_id=object_id)
 
 
 def _contract_or_404(session: Session, contract_id: int) -> Contract:
@@ -1194,7 +1200,7 @@ def edit_monthly_package(
                 client = (
                     session.scalar(
                         select(Client)
-                        .where(Client.object_id == service_object.id)
+                        .where(Client.id == service_object.client_id)
                         .order_by(Client.id)
                         .limit(1)
                     )
@@ -1748,7 +1754,7 @@ def generate_contract_period_package(period_id: int, request: Request):
         )
         client = session.scalar(
             select(Client)
-            .where(Client.object_id == service_object.id)
+            .where(Client.id == service_object.client_id)
             .order_by(Client.id)
             .limit(1)
         )

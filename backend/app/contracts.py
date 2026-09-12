@@ -199,7 +199,7 @@ def get_or_create_period(
 
 
 def serialize_billing_client(
-    row: Client, values: dict[str, str | None] | None = None
+    row: Client, values: dict[str, str | None] | None = None, *, object_id: int
 ) -> BillingClientOut:
     data = values or {
         "client_type": row.client_type,
@@ -213,7 +213,7 @@ def serialize_billing_client(
         "legal_address": row.legal_address_masked,
         "bank_details": row.bank_details_masked,
     }
-    return BillingClientOut(id=row.id, object_id=row.object_id, **data)  # type: ignore[arg-type]
+    return BillingClientOut(id=row.id, object_id=object_id, **data)  # type: ignore[arg-type]
 
 
 def serialize_inspection(row: InspectionReport) -> InspectionReportOut:

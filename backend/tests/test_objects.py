@@ -45,7 +45,7 @@ class ObjectModelTest(unittest.TestCase):
             client = Client(
                 name="Артём",
                 phone="8921***5000",
-                object=service_object,
+                objects=[service_object],
             )
             treatment = Treatment(
                 object=service_object,
@@ -67,7 +67,7 @@ class ObjectModelTest(unittest.TestCase):
             self.assertIsNone(stored_lead.object_id)
         engine.dispose()
 
-    def test_client_requires_object_and_service_masks_personal_data(self):
+    def test_client_without_object_and_service_masks_personal_data(self):
         key = Fernet.generate_key().decode("ascii")
         with patch.dict(os.environ, {"PII_FERNET_KEY": key}, clear=False):
             protected = protect_client_pii("Котлов Артём Васильевич", "89214725000")
@@ -78,9 +78,9 @@ class ObjectModelTest(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
         with Session(engine) as session:
-            session.add(Client(**protected, object_id=None))
-            with self.assertRaises(IntegrityError):
-                session.commit()
+            session.add(Client(**protected))
+            session.commit()
+            self.assertIsNotNone(session.scalar(select(Client.id)))
         engine.dispose()
 
 
@@ -381,7 +381,7 @@ class SqliteForeignKeyTest(unittest.TestCase):
 
                 verified_engine = main.create_app_engine(database_url)
                 with Session(verified_engine) as session:
-                    self.assertEqual(session.scalar(select(Client.object_id)), 1)
+                    self.assertEqual(session.scalar(select(Object.client_id)), 1)
                 verified_engine.dispose()
 
 
