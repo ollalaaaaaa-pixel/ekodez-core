@@ -13,3 +13,7 @@ dist/
 tg_offset.json
 backend/attachments/
 .playwright-cli/
+
+# Local working notes and finance artifacts: never stage them with `git add .`.
+docs/finance/
+docs/superpowers/
