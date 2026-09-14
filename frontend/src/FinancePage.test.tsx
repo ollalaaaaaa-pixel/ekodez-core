@@ -11,6 +11,34 @@ const jsonResponse = (body: unknown) =>
 describe('Finance object linking', () => {
   beforeEach(() => vi.restoreAllMocks())
 
+  test('tag filter displays only matching transactions', async () => {
+    const base = { source: 'manual', operation_date: '2026-09-01', amount: '10.00', currency: 'RUB', counterparty: null, category: 'Другие работы', kind: 'income', review_required: false, object_id: null, object_name: null, lead_id: null }
+    const rows = [
+      { ...base, id: 1, description: 'ТЕСТ проект А', tags: ['project-a'] },
+      { ...base, id: 2, description: 'ТЕСТ проект Б', tags: ['project-b'] },
+      { ...base, id: 3, description: 'ТЕСТ без тега', tags: [] },
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+      const url = String(input)
+      if (url.endsWith('/api/transactions')) return jsonResponse(rows)
+      if (url.endsWith('/api/finance/summary')) return jsonResponse({ income: '30.00', expense: '0.00', review_count: 0 })
+      if (url.includes('/api/analytics/channels')) return jsonResponse({ period_total: '30.00', channels: [] })
+      return jsonResponse([])
+    })
+    const user = userEvent.setup()
+    render(<FinancePage />)
+    await screen.findByText('ТЕСТ проект А')
+    expect(screen.queryByText('ТЕСТ проект Б')).not.toBeNull()
+    expect(screen.queryByText('ТЕСТ без тега')).not.toBeNull()
+    await user.click(screen.getByRole('combobox', { name: 'Фильтр по тегам' }))
+    await user.click(await screen.findByText('project-a', { selector: '.ant-select-item-option-content' }))
+    await waitFor(() => {
+      expect(screen.queryByText('ТЕСТ проект А')).not.toBeNull()
+      expect(screen.queryByText('ТЕСТ проект Б')).toBeNull()
+      expect(screen.queryByText('ТЕСТ без тега')).toBeNull()
+    })
+  }, 20_000)
+
   test('links an existing imported income to an object without guessing', async () => {
     const transaction = {
       id: 7,

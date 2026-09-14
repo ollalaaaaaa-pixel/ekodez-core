@@ -90,21 +90,12 @@ def upgrade() -> None:
         )
     if db.dialect.name == "sqlite":
         db.exec_driver_sql(
-            "ALTER TABLE transactions ADD COLUMN client_id INTEGER REFERENCES clients(id)"
-        )
-        db.exec_driver_sql(
             "ALTER TABLE transactions ADD COLUMN category_id INTEGER REFERENCES transaction_categories(id)"
         )
         db.exec_driver_sql(
             "ALTER TABLE transactions ADD COLUMN tags JSON NOT NULL DEFAULT '[]'"
         )
     else:
-        op.add_column(
-            "transactions",
-            sa.Column(
-                "client_id", sa.Integer, sa.ForeignKey("clients.id"), nullable=True
-            ),
-        )
         op.add_column(
             "transactions",
             sa.Column(
@@ -118,13 +109,7 @@ def upgrade() -> None:
             "transactions",
             sa.Column("tags", sa.JSON, nullable=False, server_default="[]"),
         )
-    op.create_index("ix_transactions_client_id", "transactions", ["client_id"])
     op.create_index("ix_transactions_category_id", "transactions", ["category_id"])
-    db.execute(
-        sa.text(
-            "UPDATE transactions SET client_id=(SELECT client_id FROM objects WHERE objects.id=transactions.object_id)"
-        )
-    )
     db.execute(
         sa.text(
             "UPDATE transactions SET category_id=(SELECT category_id FROM bank_category_mappings m WHERE m.kind=transactions.kind AND m.legacy_title=transactions.category)"
