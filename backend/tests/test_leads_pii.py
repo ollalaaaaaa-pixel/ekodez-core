@@ -130,7 +130,7 @@ class LeadPiiApiTest(unittest.TestCase):
             )
             client.close()
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 426)
         self.assertNotIn("89214725000", response.text)
 
     def test_telegram_ingest_masks_database_and_confirmation(self):

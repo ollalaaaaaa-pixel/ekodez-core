@@ -10,4 +10,8 @@ describe('apiBaseForHostname', () => {
   it('keeps localhost working on the owner PC', () => {
     expect(apiBaseForHostname('localhost')).toBe('http://localhost:8000')
   })
+
+  it('uses HTTPS for the backend when the UI is served over HTTPS', () => {
+    expect(apiBaseForHostname('crm.example.test', 'https:')).toBe('https://crm.example.test:8000')
+  })
 })

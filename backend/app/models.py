@@ -27,6 +27,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class ConsumedChallenge(Base):
+    __tablename__ = "consumed_challenges"
+
+    challenge_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    consumed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (Index("uq_transactions_lead_id", "lead_id", unique=True),)

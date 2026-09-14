@@ -131,6 +131,16 @@ from app.security.pii import (
     protect_lead_pii,
 )
 from app.security.pii_retention import RetentionWorker
+from app.security.tg_auth import (
+    AuthenticationError,
+    RoleConfigurationError,
+    authenticate_init_data,
+    clear_session,
+    issue_challenge,
+    principal_from_request,
+    require_owner,
+    require_reveal_access,
+)
 from app.tg_poller import poller_started, start_poller
 from app.transaction_categories import categories_router, category_titles
 
@@ -157,6 +167,7 @@ app.add_middleware(
     ),
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -443,6 +454,61 @@ class DailyReportSendOut(BaseModel):
     recipient_key: str
 
 
+class TelegramAuthIn(BaseModel):
+    init_data: str = Field(min_length=1)
+    challenge: str = Field(min_length=1)
+
+
+@app.post("/api/auth/challenge")
+def create_auth_challenge(response: Response):
+    try:
+        challenge = issue_challenge(response)
+    except AuthenticationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    print(
+        json.dumps(
+            {
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "event": "challenge_issued",
+            },
+            ensure_ascii=False,
+        )
+    )
+    return {"challenge": challenge}
+
+
+@app.post("/api/auth/telegram")
+def authenticate_telegram(
+    payload: TelegramAuthIn, request: Request, response: Response
+):
+    try:
+        principal = authenticate_init_data(
+            request, response, payload.init_data, payload.challenge, engine
+        )
+    except RoleConfigurationError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except AuthenticationError as error:
+        raise HTTPException(
+            status_code=401, detail="Не удалось войти через Telegram"
+        ) from error
+    return {"role": principal.role}
+
+
+@app.get("/api/auth/session")
+def get_auth_session(request: Request):
+    principal = principal_from_request(request)
+    return {
+        "authenticated": principal is not None,
+        "role": principal.role if principal is not None else None,
+    }
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    clear_session(response)
+    return {"status": "ok"}
+
+
 @app.get("/health")
 def health():
     return {
@@ -701,9 +767,7 @@ def get_object(
             raise HTTPException(status_code=404, detail="not found")
         if not show_pii or row.type != "apartment":
             return serialize_object(row)
-        client_host = request.client.host if request.client else ""
-        if client_host not in ("127.0.0.1", "::1"):
-            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        require_reveal_access(request)
         try:
             full_address = reveal_address(row)
         except ValueError as error:
@@ -735,15 +799,8 @@ def update_object(object_id: int, payload: ObjectUpdate, request: Request):
                 or old_contract.price != payload.contract.price
                 or old_contract.inspection_price != payload.contract.inspection_price
             )
-            client_host = request.client.host if request.client else ""
-            if money_changed and client_host not in ("127.0.0.1", "::1"):
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        "Изменение денежных полей договора доступно только "
-                        "на компьютере владельца"
-                    ),
-                )
+            if money_changed:
+                require_owner(request)
         changes = payload.model_dump(exclude_unset=True, exclude={"contract"})
         new_type = changes.get("type", row.type)
         new_address = changes.get("address")
@@ -844,7 +901,8 @@ def _mask_identifier(value: str | None) -> str | None:
 
 
 @app.put("/api/objects/{object_id}/billing-client", response_model=BillingClientOut)
-def save_billing_client(object_id: int, payload: BillingClientIn):
+def save_billing_client(object_id: int, payload: BillingClientIn, request: Request):
+    require_owner(request)
     encrypted = encrypt_sensitive_mapping(payload.model_dump())
     if encrypted is None:
         raise HTTPException(status_code=503, detail="PII encryption unavailable")
@@ -901,9 +959,7 @@ def get_billing_client(
             raise HTTPException(status_code=404, detail="not found")
         if not show_pii:
             return serialize_billing_client(row, object_id=object_id)
-        client_host = request.client.host if request.client else ""
-        if client_host not in ("127.0.0.1", "::1"):
-            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        require_reveal_access(request, owner_only=True)
         try:
             values = decrypt_sensitive_mapping(row.encrypted_requisites)
         except ValueError as error:
@@ -2682,9 +2738,7 @@ def get_lead(
             raise HTTPException(status_code=404, detail="not found")
         if not show_pii:
             return _masked_lead(row)
-        client_host = request.client.host if request.client else ""
-        if client_host not in ("127.0.0.1", "::1"):
-            raise HTTPException(status_code=403, detail="PII reveal is localhost only")
+        require_reveal_access(request)
         try:
             full_pii = decrypt_pii(row.encrypted_pii)
         except ValueError as error:

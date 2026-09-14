@@ -3,6 +3,14 @@ body {
   overflow-x: hidden;
 }
 
+.auth-state {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f5f7fa;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
 }

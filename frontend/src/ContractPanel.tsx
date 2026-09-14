@@ -132,6 +132,7 @@ export default function ContractPanel({
     const values = await contractForm.validateFields()
     const response = await fetch(`${API}/api/objects/${object.id}`, {
       method: 'PATCH',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contract: {
@@ -160,7 +161,9 @@ export default function ContractPanel({
 
   const openBilling = async () => {
     billingForm.resetFields()
-    const response = await fetch(`${API}/api/objects/${object.id}/billing-client?show_pii=true`)
+    const response = await fetch(`${API}/api/objects/${object.id}/billing-client?show_pii=true`, {
+      credentials: 'include',
+    })
     if (response.ok) billingForm.setFieldsValue(await response.json())
     setBillingOpen(true)
   }
@@ -169,6 +172,7 @@ export default function ContractPanel({
     const values = await billingForm.validateFields()
     const response = await fetch(`${API}/api/objects/${object.id}/billing-client`, {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
     })
