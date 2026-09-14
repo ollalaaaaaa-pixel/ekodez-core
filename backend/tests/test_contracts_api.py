@@ -17,6 +17,9 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.models import Base, Client, ContractPeriod, Transaction
 from app.security.pii import encrypt_sensitive_mapping
+from tests.auth_helpers import login_telegram
+
+AUTH_TOKEN = "synthetic-contract-auth-token"
 
 
 class ContractsAndActsApiTest(unittest.TestCase):
@@ -203,10 +206,20 @@ class ContractsAndActsApiTest(unittest.TestCase):
         main.engine = self.engine
         self.key = Fernet.generate_key().decode("ascii")
         self.environment = patch.dict(
-            os.environ, {"PII_FERNET_KEY": self.key}, clear=False
+            os.environ,
+            {
+                "PII_FERNET_KEY": self.key,
+                "TELEGRAM_BOT_TOKEN": AUTH_TOKEN,
+                "OWNER_TG_ID": "101",
+                "ALEXEY_TG_ID": "202",
+                "HTTPS_ENABLED": "0",
+            },
+            clear=False,
         )
         self.environment.start()
         self.client = TestClient(main.app, client=("127.0.0.1", 51000))
+        authenticated = login_telegram(self.client, 101, AUTH_TOKEN)
+        self.assertEqual(authenticated.status_code, 200, authenticated.text)
         self.object_id = self.client.post(
             "/api/objects",
             json={
@@ -314,13 +327,15 @@ class ContractsAndActsApiTest(unittest.TestCase):
             "ООО «ТЕСТ Хостел» в лице генерального директора Кузнецовой О.В.",
         )
 
-    def test_contract_money_edits_from_lan_are_forbidden_and_proxy_is_ignored(self):
+    def test_owner_can_edit_contract_money_from_lan_and_proxy_is_ignored(self):
         contract = self._create_contract()
         payload = {key: value for key, value in contract.items() if key != "id"}
         payload["price"] = "6000.00"
         payload["inspection_price"] = "3500.00"
 
         remote = TestClient(main.app, client=("192.168.1.20", 51000))
+        authenticated = login_telegram(remote, 101, AUTH_TOKEN)
+        self.assertEqual(authenticated.status_code, 200, authenticated.text)
         response = remote.patch(
             f"/api/objects/{self.object_id}",
             json={"contract": payload},
@@ -328,15 +343,10 @@ class ContractsAndActsApiTest(unittest.TestCase):
         )
         remote.close()
 
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(
-            response.json()["detail"],
-            "Изменение денежных полей договора доступно только "
-            "на компьютере владельца",
-        )
+        self.assertEqual(response.status_code, 200, response.text)
         stored = self.client.get(f"/api/objects/{self.object_id}").json()["contract"]
-        self.assertEqual(stored["price"], "5000.00")
-        self.assertEqual(stored["inspection_price"], "3000.00")
+        self.assertEqual(stored["price"], "6000.00")
+        self.assertEqual(stored["inspection_price"], "3500.00")
 
     def test_contract_money_edits_from_localhost_are_allowed(self):
         contract = self._create_contract()
@@ -351,6 +361,22 @@ class ContractsAndActsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["contract"]["price"], "6000.00")
         self.assertEqual(response.json()["contract"]["inspection_price"], "3500.00")
+
+    def test_master_cannot_edit_contract_money_even_from_localhost(self):
+        contract = self._create_contract()
+        payload = {key: value for key, value in contract.items() if key != "id"}
+        payload["price"] = "6000.00"
+        master = TestClient(main.app, client=("127.0.0.1", 52000))
+        authenticated = login_telegram(master, 202, AUTH_TOKEN)
+        self.assertEqual(authenticated.status_code, 200, authenticated.text)
+
+        response = master.patch(
+            f"/api/objects/{self.object_id}", json={"contract": payload}
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("владельцу", response.json()["detail"])
+        master.close()
 
     def test_billing_requisites_are_masked_and_local_reveal_is_audited(self):
         payload = {
@@ -377,7 +403,7 @@ class ContractsAndActsApiTest(unittest.TestCase):
             f"/api/objects/{self.object_id}/billing-client?show_pii=true"
         )
         remote.close()
-        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.status_code, 426)
 
         revealed = self.client.get(
             f"/api/objects/{self.object_id}/billing-client?show_pii=true"
@@ -391,6 +417,54 @@ class ContractsAndActsApiTest(unittest.TestCase):
             self.assertNotIn(payload["inn"], row.inn_masked or "")
             self.assertNotIn("407028", row.bank_details_masked or "")
             self.assertIsNotNone(row.encrypted_requisites)
+
+    def test_billing_requisites_are_owner_only_and_master_keeps_masks(self):
+        test_inn = "2901" + "000010"
+        test_registration = "1022900" + "000000"
+        test_account = "4070281" + "0000000" + "000000"
+        self._save_billing_client()
+        master = TestClient(
+            main.app,
+            base_url="https://crm.test",
+            client=("192.168.1.21", 51000),
+        )
+        authenticated = login_telegram(master, 202, AUTH_TOKEN)
+        self.assertEqual(authenticated.status_code, 200, authenticated.text)
+
+        masked = master.get(f"/api/objects/{self.object_id}/billing-client")
+        self.assertEqual(masked.status_code, 200)
+        self.assertNotIn(test_inn, masked.text)
+        reveal = master.get(
+            f"/api/objects/{self.object_id}/billing-client?show_pii=true"
+        )
+        self.assertEqual(reveal.status_code, 403)
+        overwrite = master.put(
+            f"/api/objects/{self.object_id}/billing-client",
+            json={
+                "client_type": "legal_entity",
+                "name": "ООО ТЕСТ",
+                "inn": test_inn,
+                "registration_number": test_registration,
+                "bank_details": f"р/с {test_account}",
+            },
+        )
+        self.assertEqual(overwrite.status_code, 403)
+        master.close()
+
+        owner = TestClient(
+            main.app,
+            base_url="https://crm.test",
+            client=("192.168.1.22", 51000),
+        )
+        authenticated = login_telegram(owner, 101, AUTH_TOKEN)
+        self.assertEqual(authenticated.status_code, 200, authenticated.text)
+        revealed = owner.get(
+            f"/api/objects/{self.object_id}/billing-client?show_pii=true"
+        )
+        self.assertEqual(revealed.status_code, 200, revealed.text)
+        self.assertEqual(revealed.json()["inn"], test_inn)
+        self.assertEqual(revealed.headers["cache-control"], "no-store")
+        owner.close()
 
     def test_inspection_period_defaults_updates_and_explicit_income_link(self):
         contract = self._create_contract()

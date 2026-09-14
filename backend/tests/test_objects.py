@@ -20,6 +20,9 @@ from alembic import command
 from app import main
 from app.models import Base, Client, Contract, Lead, Object, Treatment
 from app.objects import protect_client_pii
+from tests.auth_helpers import login_telegram
+
+AUTH_TOKEN = "123456789:synthetic-test-token"
 
 
 class ObjectModelTest(unittest.TestCase):
@@ -225,17 +228,25 @@ class ObjectApiTest(unittest.TestCase):
 
     def test_patch_updates_and_detaches_owned_contract_without_orphans(self):
         created = self.client.post("/api/objects", json=self._gym_payload()).json()
-        updated = self.client.patch(
-            f"/api/objects/{created['id']}",
-            json={
-                "contract": {
-                    "number": "17/08",
-                    "price": "6000.00",
-                    "periodicity": "monthly",
-                    "service_months": [],
-                }
-            },
-        )
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": AUTH_TOKEN, "OWNER_TG_ID": "101"},
+            clear=False,
+        ):
+            self.assertEqual(
+                login_telegram(self.client, 101, AUTH_TOKEN).status_code, 200
+            )
+            updated = self.client.patch(
+                f"/api/objects/{created['id']}",
+                json={
+                    "contract": {
+                        "number": "17/08",
+                        "price": "6000.00",
+                        "periodicity": "monthly",
+                        "service_months": [],
+                    }
+                },
+            )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["contract"]["price"], "6000.00")
 

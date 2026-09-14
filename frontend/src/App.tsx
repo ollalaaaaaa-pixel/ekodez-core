@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Layout, Menu, Typography, Card } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { Alert, Layout, Menu, Typography, Card, Spin } from 'antd'
 import {
   CalendarOutlined,
   DollarOutlined,
@@ -18,6 +18,7 @@ import InventoryPage from './InventoryPage'
 import DashboardPage from './DashboardPage'
 import ClientsPage from './ClientsPage'
 import SettingsPage from './SettingsPage'
+import { authenticateTelegramMiniApp, telegramMiniAppInitData } from './auth'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -35,6 +36,31 @@ const screens: Record<string, string> = {
 
 export default function App() {
   const [current, setCurrent] = useState('day')
+  const initData = telegramMiniAppInitData()
+  const [authState, setAuthState] = useState<'checking' | 'ready' | 'error'>(
+    initData ? 'checking' : 'ready',
+  )
+  const [authError, setAuthError] = useState('')
+  const authStarted = useRef(false)
+
+  useEffect(() => {
+    if (!initData || authStarted.current) return
+    authStarted.current = true
+    window.Telegram?.WebApp?.ready?.()
+    authenticateTelegramMiniApp(initData)
+      .then(() => setAuthState('ready'))
+      .catch((error: unknown) => {
+        setAuthError(error instanceof Error ? error.message : 'Не удалось войти через Telegram')
+        setAuthState('error')
+      })
+  }, [initData])
+
+  if (authState === 'checking') {
+    return <div className="auth-state"><Spin size="large" tip="Вход через Telegram…" /></div>
+  }
+  if (authState === 'error') {
+    return <div className="auth-state"><Alert type="error" showIcon message="Не удалось войти" description={authError} /></div>
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

@@ -78,6 +78,7 @@ describe('Lead PII reveal', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock).toHaveBeenLastCalledWith(
       'http://localhost:8000/api/leads/1?show_pii=true',
+      { credentials: 'include' },
     )
     expect(await screen.findByText('89214725000')).toBeTruthy()
     expect(screen.getByText('г. Архангельск, ул. Ленина, 10, кв. 5')).toBeTruthy()

@@ -197,7 +197,9 @@ export default function LeadsPage() {
       okText: 'Да, показать',
       cancelText: 'Отмена',
       onOk: async () => {
-        const response = await fetch(`${API}/api/leads/${lead.id}?show_pii=true`)
+        const response = await fetch(`${API}/api/leads/${lead.id}?show_pii=true`, {
+          credentials: 'include',
+        })
         if (!response.ok) {
           message.error('Не удалось раскрыть данные. Проверьте локальный доступ и ключ PII.')
           return
