@@ -20,7 +20,7 @@ import type { TableColumnsType } from 'antd'
 import { CheckOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons'
 import { API } from './api'
 import './BankImportDrawer.css'
-import { INCOME_CATEGORIES } from './dictionaries'
+import { useIncomeCategories } from './useIncomeCategories'
 
 type BankPreviewRow = {
   operation_type: string
@@ -99,6 +99,7 @@ const previewErrorText = (detail: unknown) => {
 }
 
 export default function BankImportDrawer({ open, onClose, onImported }: Props) {
+  const INCOME_CATEGORIES = useIncomeCategories()
   const [file, setFile] = useState<File | null>(null)
   const [rows, setRows] = useState<EditableBankRow[]>([])
   const [expenseCategories, setExpenseCategories] = useState<string[]>([])

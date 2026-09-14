@@ -82,6 +82,7 @@ class ContractOut(BaseModel):
 
 
 class ObjectIn(BaseModel):
+    client_id: int | None = Field(default=None, gt=0)
     name: str = Field(min_length=1, max_length=300)
     address: str = Field(min_length=1, max_length=500)
     type: ObjectType
@@ -102,6 +103,7 @@ class ObjectIn(BaseModel):
 
 
 class ObjectUpdate(BaseModel):
+    client_id: int | None = Field(default=None, gt=0)
     name: str | None = Field(default=None, min_length=1, max_length=300)
     address: str | None = Field(default=None, min_length=1, max_length=500)
     type: ObjectType | None = None
@@ -132,6 +134,7 @@ class ObjectUpdate(BaseModel):
 
 
 class ObjectOut(BaseModel):
+    client_id: int | None
     id: int
     name: str
     address: str
@@ -219,6 +222,7 @@ def serialize_contract(row: Contract | None) -> ContractOut | None:
 
 def serialize_object(row: Object, *, address: str | None = None) -> ObjectOut:
     return ObjectOut(
+        client_id=row.client_id,
         id=row.id,
         name=row.name,
         address=row.address if address is None else address,

@@ -9,7 +9,8 @@ import {
 import dayjs from 'dayjs'
 import { API } from './api'
 import BankImportDrawer from './BankImportDrawer'
-import { INCOME_CATEGORIES, LEAD_SOURCES } from './dictionaries'
+import { LEAD_SOURCES } from './dictionaries'
+import { useIncomeCategories } from './useIncomeCategories'
 import './FinancePage.css'
 
 type Tx = {
@@ -27,6 +28,7 @@ type Tx = {
   object_id: number | null
   object_name: string | null
   lead_id: number | null
+  tags?: string[]
 }
 
 type ObjectOption = { id: number; name: string }
@@ -87,8 +89,10 @@ const marketingSourceLabel = Object.fromEntries(
 )
 
 export default function FinancePage() {
+  const incomeCategories = useIncomeCategories()
   const [summary, setSummary] = useState<Summary | null>(null)
   const [rows, setRows] = useState<Tx[]>([])
+  const [tagFilter, setTagFilter] = useState<string[]>([])
   const [draftAmounts, setDraftAmounts] = useState<Record<number, string | null>>({})
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [channelAnalytics, setChannelAnalytics] = useState<ChannelAnalytics | null>(null)
@@ -198,6 +202,7 @@ export default function FinancePage() {
       category: transaction.category,
       description: transaction.description,
       marketing_source: transaction.marketing_source,
+      tags: transaction.tags,
     })
     if (transaction.kind === 'expense' && expenseCategories.length === 0) {
       try {
@@ -216,12 +221,14 @@ export default function FinancePage() {
     category?: string
     description?: string
     marketing_source?: string
+    tags?: string[]
   }) => {
     if (!editing) return
     setEditSaving(true)
     try {
       const payload = {
         operation_date: values.operation_date,
+        ...(values.tags !== undefined ? { tags: values.tags } : {}),
         ...(
           editing.kind === 'income' || editing.kind === 'expense'
             ? { category: values.category }
@@ -474,7 +481,8 @@ export default function FinancePage() {
         </Spin>
       </Card>
       <Card style={{ marginTop: 16 }} title="Операции">
-        <Table rowKey="id" columns={columns as any} dataSource={rows} pagination={{ pageSize: 10 }} />
+        <Select mode="multiple" aria-label="Фильтр по тегам" placeholder="Фильтр по тегам" allowClear style={{ minWidth: 260, marginBottom: 12 }} value={tagFilter} onChange={setTagFilter} options={[...new Set(rows.flatMap(row => row.tags ?? []))].sort().map(value => ({ value, label: value }))} />
+        <Table rowKey="id" columns={columns as any} dataSource={rows.filter(row => tagFilter.every(tag => (row.tags ?? []).includes(tag)))} pagination={{ pageSize: 10 }} />
       </Card>
       <BankImportDrawer
         open={bankImportOpen}
@@ -525,7 +533,7 @@ export default function FinancePage() {
               <Select
                 options={(editing.kind === 'expense'
                   ? expenseCategories.map((item) => item.name)
-                  : INCOME_CATEGORIES
+                  : incomeCategories
                 ).map((value) => ({ value, label: value }))}
               />
             </Form.Item>
@@ -541,6 +549,9 @@ export default function FinancePage() {
           )}
           <Form.Item name="description" label="Комментарий">
             <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="tags" label="Теги проекта или клиента">
+            <Select mode="tags" tokenSeparators={[',']} maxCount={20} />
           </Form.Item>
           <Button type="primary" htmlType="submit" loading={editSaving} block>
             Сохранить операцию

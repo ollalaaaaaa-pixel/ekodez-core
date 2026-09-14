@@ -230,9 +230,10 @@ def parse_tbank_xlsx(content: bytes) -> list[BankRow]:
 
                 def value_for(
                     header: str,
-                    indexes: dict[str, int] = header_indexes,
+                    indexes: dict[str, int] | None = header_indexes,
                     row_values: tuple[object, ...] = values,
                 ) -> object:
+                    assert indexes is not None
                     index = indexes[header]
                     return row_values[index] if index < len(row_values) else None
 

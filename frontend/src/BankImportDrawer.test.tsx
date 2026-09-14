@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import BankImportDrawer from './BankImportDrawer'
 
+vi.mock('./useIncomeCategories', () => ({ useIncomeCategories: () => ['Другие работы'] }))
+
 const reviewRow = (index: number) => ({
   operation_type: 'Дебет',
   operation_date: '2026-08-16',

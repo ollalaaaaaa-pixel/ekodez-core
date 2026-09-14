@@ -117,7 +117,7 @@ def run_auto_contract_packages(
                 continue
             client = session.scalar(
                 select(Client)
-                .where(Client.object_id == service_object.id)
+                .where(Client.id == service_object.client_id)
                 .order_by(Client.id)
                 .limit(1)
             )
