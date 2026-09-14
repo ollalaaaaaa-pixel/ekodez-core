@@ -483,7 +483,7 @@ def authenticate_telegram(
 ):
     try:
         principal = authenticate_init_data(
-            request, response, payload.init_data, payload.challenge
+            request, response, payload.init_data, payload.challenge, engine
         )
     except RoleConfigurationError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -8,11 +9,12 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app import main
-from app.models import Base
+from app.models import Base, ConsumedChallenge
 from tests.auth_helpers import login_telegram, signed_init_data
 
 TOKEN = "synthetic-api-bot-token"
@@ -100,6 +102,35 @@ class TelegramAuthApiTests(unittest.TestCase):
             challenge = client.post("/api/auth/challenge")
             self.assertIn("Secure", challenge.headers["set-cookie"])
             client.close()
+
+    def test_original_challenge_cookie_cannot_be_replayed_after_success(self):
+        from app.security.tg_auth import CHALLENGE_COOKIE
+
+        with TestClient(main.app) as client:
+            issued = client.post("/api/auth/challenge")
+            original_cookie = issued.cookies.get(CHALLENGE_COOKIE)
+            payload = {
+                "init_data": signed_init_data(101, TOKEN),
+                "challenge": issued.json()["challenge"],
+            }
+            self.assertEqual(
+                client.post("/api/auth/telegram", json=payload).status_code, 200
+            )
+            replay = client.post(
+                "/api/auth/telegram",
+                json=payload,
+                headers={"Cookie": f"{CHALLENGE_COOKIE}={original_cookie}"},
+            )
+            self.assertEqual(replay.status_code, 401)
+            with Session(self.engine) as database:
+                rows = database.scalars(select(ConsumedChallenge)).all()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(
+                    rows[0].challenge_hash,
+                    hashlib.sha256(payload["challenge"].encode()).hexdigest(),
+                )
+                self.assertNotEqual(rows[0].challenge_hash, payload["challenge"])
+                self.assertIsNotNone(rows[0].consumed_at)
 
     def test_expired_session_is_rejected(self):
         client = TestClient(main.app)

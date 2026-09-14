@@ -6,10 +6,16 @@ import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request, Response
+from sqlalchemy import Engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models import ConsumedChallenge
 
 AuthRole = Literal["owner", "master"]
 MAX_INIT_DATA_AGE_SECONDS = 600
@@ -158,6 +164,7 @@ def authenticate_init_data(
     response: Response,
     init_data: str,
     challenge: str,
+    engine: Engine,
     *,
     now: int | None = None,
 ) -> AuthPrincipal:
@@ -181,6 +188,22 @@ def authenticate_init_data(
     session = _signed_value(
         {"role": principal.role, "exp": current + SESSION_TTL_SECONDS}, "session"
     )
+    # Commit the unique hash before issuing a session: concurrent replays lose
+    # at the database constraint, including across workers and process restarts.
+    with Session(engine) as database:
+        database.add(
+            ConsumedChallenge(
+                challenge_hash=hashlib.sha256(challenge.encode()).hexdigest(),
+                consumed_at=datetime.fromtimestamp(current, UTC),
+            )
+        )
+        try:
+            database.commit()
+        except IntegrityError as error:
+            database.rollback()
+            raise AuthenticationError(
+                "Authentication challenge already consumed"
+            ) from error
     _set_cookie(response, SESSION_COOKIE, session, SESSION_TTL_SECONDS)
     return principal
 

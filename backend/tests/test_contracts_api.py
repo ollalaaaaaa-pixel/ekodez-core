@@ -348,7 +348,7 @@ class ContractsAndActsApiTest(unittest.TestCase):
         self.assertEqual(stored["price"], "6000.00")
         self.assertEqual(stored["inspection_price"], "3500.00")
 
-    def test_contract_money_edits_from_localhost_are_allowed(self):
+    def test_owner_can_edit_contract_money_from_localhost(self):
         contract = self._create_contract()
         payload = {key: value for key, value in contract.items() if key != "id"}
         payload["price"] = "6000.00"
