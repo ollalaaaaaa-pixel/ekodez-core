@@ -33,7 +33,13 @@ def ads_metrics(session: Session, start: date, end: date) -> list[MetricRow]:
     grouped: dict[tuple[str, str], Decimal] = {}
     for spend_row in spends:
         key = (spend_row.platform, spend_row.campaign)
-        grouped[key] = grouped.get(key, Decimal("0.00")) + Decimal(spend_row.spend)
+        total_days = (spend_row.period_end - spend_row.period_start).days + 1
+        overlap_start = max(start, spend_row.period_start)
+        overlap_end = min(end, spend_row.period_end)
+        overlap_days = (overlap_end - overlap_start).days + 1
+        full_spend = Decimal(spend_row.spend or 0)
+        apportioned = (full_spend * overlap_days / total_days).quantize(Decimal("0.01"))
+        grouped[key] = grouped.get(key, Decimal("0.00")) + apportioned
     campaign_counts: dict[str, int] = {}
     for platform, _ in grouped:
         campaign_counts[platform] = campaign_counts.get(platform, 0) + 1

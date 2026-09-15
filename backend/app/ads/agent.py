@@ -25,7 +25,8 @@ def create_upload_reminders(
             select(AdImportRun.id).where(
                 AdImportRun.platform == platform,
                 AdImportRun.status == "ok",
-                AdImportRun.created_at >= cutoff,
+                AdImportRun.period_end.is_not(None),
+                AdImportRun.period_end >= cutoff.date(),
             )
         )
         period_key = (
@@ -48,7 +49,7 @@ def create_upload_reminders(
                 "ads_upload_reminder",
                 {
                     "platform": platform,
-                    "folder": str(config.root / platform),
+                    "folder": f"ads/{platform}",
                     "instructions": [
                         "расход, показы и клики по кампаниям",
                         "конверсии и звонки",

@@ -1,3 +1,4 @@
+import smtplib
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -45,12 +46,32 @@ class AdsReminderAgentTest(unittest.TestCase):
                     source_file="report.xlsx",
                     status="ok",
                     rows_imported=3,
+                    period_start=self.now.date() - timedelta(days=7),
+                    period_end=self.now.date() - timedelta(days=1),
                     created_at=self.now - timedelta(days=1),
                 )
             )
             session.commit()
             self.assertEqual(
                 create_upload_reminders(session, self.config, self.now), []
+            )
+
+    def test_recent_upload_of_stale_period_does_not_suppress_reminder(self):
+        with Session(self.engine) as session:
+            session.add(
+                AdImportRun(
+                    platform="2gis",
+                    source_file="file-0123456789ab.xlsx",
+                    status="ok",
+                    rows_imported=3,
+                    period_start=self.now.date() - timedelta(days=40),
+                    period_end=self.now.date() - timedelta(days=30),
+                    created_at=self.now - timedelta(hours=1),
+                )
+            )
+            session.commit()
+            self.assertEqual(
+                len(create_upload_reminders(session, self.config, self.now)), 1
             )
 
     def test_weekly_agent_alerts_only_after_two_high_cpl_weeks_and_never_emails(self):
@@ -112,6 +133,8 @@ class AdsReminderAgentTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as temp_dir,
             patch("app.ads.agent.load_ads_config", return_value=config),
             patch("app.ads.agent.ANALYSIS_ROOT", Path(temp_dir)),
+            patch.object(smtplib, "SMTP") as smtp,
+            patch.object(smtplib, "SMTP_SSL") as smtp_ssl,
         ):
             result = run_ads_weekly(
                 self.engine, self.now, lambda value: not messages.append(value)
@@ -123,6 +146,8 @@ class AdsReminderAgentTest(unittest.TestCase):
             self.assertIn(
                 "не отправлено", Path(result["drafts"][0]).read_text(encoding="utf-8")
             )
+            smtp.assert_not_called()
+            smtp_ssl.assert_not_called()
 
 
 if __name__ == "__main__":

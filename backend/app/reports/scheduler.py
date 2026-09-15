@@ -62,19 +62,20 @@ def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
                                 send_message(
                                     token,
                                     int(owner),
-                                    f"Ошибка импорта рекламы {platform}: {path.name}; "
-                                    f"{str(error)[:160]}",
+                                    f"Ошибка импорта рекламы {platform}: "
+                                    f"{type(error).__name__}; данные файла скрыты",
                                 )
     elif job == "reminders":
         with Session(engine) as session:
             reminders = create_upload_reminders(session, config, local)
             session.commit()
-        if reminders:
+            reminder_payloads = [dict(row.payload) for row in reminders]
+        if reminder_payloads:
             token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
             owner = os.getenv("OWNER_TG_ID", "").strip()
             if token and owner.isdigit():
-                for row in reminders:
-                    instructions = row.payload.get("instructions", [])
+                for payload in reminder_payloads:
+                    instructions = payload.get("instructions", [])
                     if not isinstance(instructions, list):
                         instructions = []
                     instruction_lines = "\n".join(
@@ -84,8 +85,8 @@ def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
                         token,
                         int(owner),
                         "Пора обновить рекламную выгрузку\n"
-                        f"Площадка: {row.payload.get('platform')}\n"
-                        f"Папка: {row.payload.get('folder')}\n"
+                        f"Площадка: {payload.get('platform')}\n"
+                        f"Папка: {payload.get('folder')}\n"
                         f"{instruction_lines}",
                     )
     else:

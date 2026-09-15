@@ -94,6 +94,24 @@ class AdsServicesTest(unittest.TestCase):
                 self.assertEqual(run.status, "error")
                 self.assertEqual(notice.kind, "ads_import_error")
                 self.assertNotIn("phone", repr(notice.payload).lower())
+                self.assertNotIn("broken.csv", run.source_file)
+                self.assertNotIn("foo", run.error or "")
+
+    def test_import_masks_sensitive_values_in_journal_and_notification(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "client-+79215551234@example.ru.csv"
+            path.write_text(
+                "Дата звонка;Телефон\n08.09.2026;+79215551234\n", encoding="utf-8"
+            )
+            with Session(self.engine) as session:
+                summary = import_ads_file(session, "2gis", path, pii_key=self.key)
+                session.commit()
+                run = session.scalar(select(AdImportRun))
+                notice = session.scalar(select(Notification))
+                stored = repr((run.source_file, run.error, notice.payload, summary))
+                self.assertNotIn("79215551234", stored)
+                self.assertNotIn("example.ru", stored)
+                self.assertRegex(run.source_file, r"^file-[0-9a-f]{12}\.csv$")
 
     def test_utm_phone_match_manual_and_metrics(self):
         now = datetime(2026, 9, 8, 12, tzinfo=UTC)
@@ -180,6 +198,46 @@ class AdsServicesTest(unittest.TestCase):
             )
             self.assertNotIn("phone", row.payload)
             self.assertNotIn("79215551234", repr(row.payload))
+            self.assertNotIn("calls.csv", repr(row.payload))
+
+            alert = create_notification(
+                session,
+                "ads_alert",
+                {
+                    "platform": "2gis",
+                    "reason": "client +79215551234",
+                    "period": "2026-09-01-2026-09-07",
+                    "metrics": {
+                        "spend": "100.00",
+                        "leads": 1,
+                        "campaign": "client +79215551234",
+                    },
+                },
+                datetime.now(UTC),
+            )
+            self.assertNotIn("79215551234", repr(alert.payload))
+            self.assertNotIn("campaign", repr(alert.payload))
+
+    def test_metrics_prorate_overlapping_period_and_serialize_nulls(self):
+        with Session(self.engine) as session:
+            session.add(
+                AdSpend(
+                    platform="2gis",
+                    campaign="card",
+                    period_start=date(2026, 9, 1),
+                    period_end=date(2026, 9, 10),
+                    spend=Decimal("1000.00"),
+                    impressions=0,
+                    clicks=0,
+                    conversions=0,
+                )
+            )
+            session.commit()
+            row = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 5))[0]
+            self.assertEqual(row.spend, Decimal("500.00"))
+            self.assertIsNone(row.cpl)
+            self.assertEqual(row.romi, Decimal("-100.00"))
+            self.assertEqual(row.json()["cpl"], None)
 
 
 if __name__ == "__main__":

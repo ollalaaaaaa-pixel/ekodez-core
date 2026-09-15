@@ -20,6 +20,14 @@ class ImportSummary:
     period: str | None
 
 
+def _safe_file_reference(path: Path, digest: str | None) -> str:
+    suffix = (
+        path.suffix.lower() if path.suffix.lower() in {".csv", ".xlsx", ".xls"} else ""
+    )
+    reference_hash = digest or hashlib.sha256(path.name.encode("utf-8")).hexdigest()
+    return f"file-{reference_hash[:12]}{suffix}"
+
+
 def import_ads_file(
     session: Session,
     platform: str,
@@ -28,11 +36,11 @@ def import_ads_file(
     now: datetime | None = None,
 ) -> ImportSummary:
     timestamp = now or datetime.now(UTC)
-    filename = path.name
     file_sha256: str | None = None
     updated = 0
     try:
         file_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        filename = _safe_file_reference(path, file_sha256)
         parsed = parse_ads_file(path, platform, pii_key=pii_key)
         for spend_item in parsed.spend_rows:
             row = session.scalar(
@@ -122,7 +130,8 @@ def import_ads_file(
         return ImportSummary(platform, filename, count, period)
     except (AdsParseError, OSError, ValueError) as exc:
         session.rollback()
-        reason = str(exc)[:300]
+        filename = _safe_file_reference(path, file_sha256)
+        reason = f"{type(exc).__name__}: импорт отклонён"
         session.add(
             AdImportRun(
                 platform=platform,

@@ -67,6 +67,11 @@ class AdsApiAuthorizationTest(unittest.TestCase):
                 self.client.cookies.set(SESSION_COOKIE, self._cookie("master"))
                 self.assertEqual(self.client.post(path, json=payload).status_code, 403)
 
+    def test_metrics_reject_reversed_period(self):
+        self.client.cookies.set(SESSION_COOKIE, self._cookie("owner"))
+        response = self.client.get("/api/ads/metrics?start=2026-09-30&end=2026-09-01")
+        self.assertEqual(response.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

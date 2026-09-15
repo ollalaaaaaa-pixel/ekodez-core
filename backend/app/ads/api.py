@@ -52,8 +52,8 @@ def ads_router(engine_factory: Callable[[], Engine]) -> APIRouter:
                         send_message(
                             token,
                             int(owner),
-                            f"Ошибка импорта рекламы {platform}: {path.name}; "
-                            f"{str(exc)[:160]}",
+                            f"Ошибка импорта рекламы {platform}: "
+                            f"{type(exc).__name__}; данные файла скрыты",
                         )
                     continue
                 summaries.append(
@@ -69,6 +69,8 @@ def ads_router(engine_factory: Callable[[], Engine]) -> APIRouter:
     @router.get("/metrics")
     def metrics(request: Request, start: date, end: date) -> list[dict[str, object]]:
         require_owner(request)
+        if start > end:
+            raise HTTPException(status_code=422, detail="Начало периода позже конца")
         with Session(engine_factory()) as session:
             return [row.json() for row in ads_metrics(session, start, end)]
 

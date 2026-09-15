@@ -4,9 +4,12 @@ Revision ID: a1d5e7c9f302
 Revises: f1b5d8c0e236
 """
 
+from pathlib import Path
+
 import sqlalchemy as sa
 
 from alembic import op
+from app.migration_backup import backup_sqlite
 
 revision = "a1d5e7c9f302"
 down_revision = "f1b5d8c0e236"
@@ -15,6 +18,17 @@ depends_on = None
 
 
 def upgrade() -> None:
+    connection = op.get_bind()
+    preserved_tables = ("leads", "clients", "objects", "transactions")
+    before = {
+        table: connection.scalar(sa.text(f"SELECT count(*) FROM {table}"))
+        for table in preserved_tables
+    }
+    if connection.dialect.name == "sqlite":
+        database = connection.engine.url.database
+        if database and database != ":memory:":
+            backup_sqlite(Path(database))
+
     with op.batch_alter_table("leads") as batch_op:
         batch_op.add_column(sa.Column("utm_source", sa.String(100), nullable=True))
         batch_op.add_column(sa.Column("utm_campaign", sa.String(200), nullable=True))
@@ -42,8 +56,12 @@ def upgrade() -> None:
         sa.Column("impressions", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("clicks", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("conversions", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+        ),
         sa.CheckConstraint("spend >= 0", name="ck_ad_spend_nonnegative"),
         sa.UniqueConstraint(
             "platform",
@@ -63,7 +81,9 @@ def upgrade() -> None:
         sa.Column("call_date", sa.DateTime(timezone=True), nullable=False),
         sa.Column("phone_hash", sa.String(64), nullable=False),
         sa.Column("source_file", sa.String(255), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+        ),
         sa.UniqueConstraint(
             "platform",
             "call_date",
@@ -88,7 +108,9 @@ def upgrade() -> None:
         sa.Column("period_start", sa.Date(), nullable=True),
         sa.Column("period_end", sa.Date(), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+        ),
     )
     op.create_index("ix_ad_import_runs_platform", "ad_import_runs", ["platform"])
     op.create_index("ix_ad_import_runs_status", "ad_import_runs", ["status"])
@@ -99,7 +121,9 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("kind", sa.String(50), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False, server_default="{}"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+        ),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "kind IN ('ads_import_ok', 'ads_import_error', "
@@ -109,6 +133,18 @@ def upgrade() -> None:
     )
     op.create_index("ix_notifications_kind", "notifications", ["kind"])
     op.create_index("ix_notifications_created_at", "notifications", ["created_at"])
+
+    after = {
+        table: connection.scalar(sa.text(f"SELECT count(*) FROM {table}"))
+        for table in preserved_tables
+    }
+    if after != before:
+        raise RuntimeError("Ads migration: preserved row counts do not match")
+    if connection.dialect.name == "sqlite":
+        if connection.exec_driver_sql("PRAGMA foreign_key_check").all():
+            raise RuntimeError("Ads migration: foreign key violations")
+        if connection.exec_driver_sql("PRAGMA integrity_check").scalar() != "ok":
+            raise RuntimeError("Ads migration: integrity check failed")
 
 
 def downgrade() -> None:
