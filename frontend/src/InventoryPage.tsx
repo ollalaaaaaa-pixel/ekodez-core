@@ -16,9 +16,11 @@ import {
 } from 'antd'
 import { ExperimentOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import { API } from './api'
+import { ChemicalDetails, ChemicalFormFields } from './ChemicalDictionary'
+import type { ChemicalNotes } from './ChemicalDictionary'
 import './InventoryPage.css'
 
-type Inventory = {
+type Inventory = ChemicalNotes & {
   id: number
   chemical_name: string
   quantity: string
@@ -49,7 +51,7 @@ type Treatment = {
   notes: string | null
 }
 
-type InventoryForm = {
+type InventoryForm = ChemicalNotes & {
   chemical_name: string
   quantity: string
   unit: string
@@ -96,6 +98,8 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('')
   const [lowOnly, setLowOnly] = useState(false)
   const [inventoryOpen, setInventoryOpen] = useState(false)
+  const [editingInventory, setEditingInventory] = useState<Inventory | null>(null)
+  const [canEdit, setCanEdit] = useState(false)
   const [treatmentOpen, setTreatmentOpen] = useState(false)
   const [inventoryForm] = Form.useForm<InventoryForm>()
   const [treatmentForm] = Form.useForm<TreatmentForm>()
@@ -129,9 +133,24 @@ export default function InventoryPage() {
     loadRelated().catch(() => message.error('Не удалось загрузить историю'))
   }, [loadRelated])
 
+  useEffect(() => {
+    fetch(`${API}/api/auth/session`, { credentials: 'include' })
+      .then(async response => response.ok ? await response.json() : null)
+      .then(session => setCanEdit(session?.role === 'owner'))
+      .catch(() => setCanEdit(false))
+  }, [])
+
+  const openInventory = (row: Inventory | null) => {
+    setEditingInventory(row)
+    inventoryForm.resetFields()
+    inventoryForm.setFieldsValue(row || { alternatives: [], pest_tags: [] })
+    setInventoryOpen(true)
+  }
+
   const createInventory = async (values: InventoryForm) => {
-    const response = await fetch(`${API}/api/inventory`, {
-      method: 'POST',
+    const response = await fetch(`${API}/api/inventory${editingInventory ? `/${editingInventory.id}` : ''}`, {
+      method: editingInventory ? 'PATCH' : 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...values, quantity: decimalString(values.quantity) }),
     })
@@ -185,9 +204,9 @@ export default function InventoryPage() {
           <Checkbox checked={lowOnly} onChange={(event) => setLowOnly(event.target.checked)}>
             Только низкий остаток
           </Checkbox>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setInventoryOpen(true)}>
+          {canEdit ? <Button type="primary" icon={<PlusOutlined />} onClick={() => openInventory(null)}>
             Добавить препарат
-          </Button>
+          </Button> : null}
           <Button icon={<ExperimentOutlined />} onClick={() => setTreatmentOpen(true)}>
             Списать на обработку
           </Button>
@@ -213,6 +232,8 @@ export default function InventoryPage() {
                   <span>Партия: {row.batch_number}</span>
                   <span>Годен до: {row.expiry_date}</span>
                   <span>Поставщик: {row.supplier}</span>
+                  <ChemicalDetails row={row} positions={inventory} />
+                  {canEdit ? <Button onClick={() => openInventory(row)}>Редактировать препарат</Button> : null}
                   {row.low_stock ? <Tag color="red">Низкий остаток</Tag> : <Tag color="green">В норме</Tag>}
                 </div>
               </Card>
@@ -222,6 +243,7 @@ export default function InventoryPage() {
           rowKey="id"
           dataSource={inventory}
           pagination={{ pageSize: 10 }}
+          expandable={{ expandedRowRender: row => <><ChemicalDetails row={row} positions={inventory} />{canEdit ? <Button onClick={() => openInventory(row)}>Редактировать препарат</Button> : null}</> }}
           columns={[
             { title: 'Препарат', dataIndex: 'chemical_name' },
             {
@@ -292,7 +314,7 @@ export default function InventoryPage() {
       </Card>
 
       <Modal
-        title="Новая партия"
+        title={editingInventory ? 'Карточка препарата' : 'Новая партия'}
         open={inventoryOpen}
         onCancel={() => setInventoryOpen(false)}
         onOk={() => inventoryForm.submit()}
@@ -318,6 +340,7 @@ export default function InventoryPage() {
           <Form.Item name="supplier" label="Поставщик" rules={[{ required: true }]}>
             <Input placeholder="Поставщик" />
           </Form.Item>
+          <ChemicalFormFields positions={inventory} currentId={editingInventory?.id} />
         </Form>
       </Modal>
 

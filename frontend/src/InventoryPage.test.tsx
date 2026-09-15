@@ -13,6 +13,12 @@ const inventoryRow = {
   expiry_date: '2027-08-01',
   supplier: 'Поставщик',
   low_stock: true,
+  active_substance: 'ТЕСТ действующее вещество',
+  resistance_note: 'ТЕСТ устойчивость',
+  dosage_note: 'ТЕСТ расход',
+  hazard_class: 'ТЕСТ класс',
+  pest_tags: ['клопы'],
+  alternatives: [],
 }
 
 const objectRow = {
@@ -65,6 +71,7 @@ describe('Inventory screen', () => {
   test('shows stock, low-stock alert and treatment history', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = String(input)
+      if (url.endsWith('/api/auth/session')) return jsonResponse({ role: 'owner' })
       if (url.endsWith('/api/inventory')) return jsonResponse([inventoryRow])
       if (url.endsWith('/api/treatments')) return jsonResponse([treatmentRow])
       if (url.endsWith('/api/objects')) return jsonResponse([objectRow])
@@ -86,6 +93,7 @@ describe('Inventory screen', () => {
     let listCalls = 0
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = String(input)
+      if (url.endsWith('/api/auth/session')) return jsonResponse({ role: 'owner' })
       if (url.endsWith('/api/inventory') && init?.method === 'POST') {
         return jsonResponse({ ...inventoryRow, quantity: '100.000', low_stock: false })
       }
@@ -140,5 +148,30 @@ describe('Inventory screen', () => {
     expect(screen.queryByTestId('inventory-desktop-table')).toBeNull()
     expect(screen.getByText('9.000 мл')).toBeTruthy()
     expect(screen.getByText('1.250 мл')).toBeTruthy()
+    expect(screen.getByText('ТЕСТ действующее вещество')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Редактировать препарат/ })).toBeNull()
   }, 15_000)
+
+  test('owner opens saved chemical notes and edits with session credentials', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({ matches: query.includes('767px'), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url.endsWith('/api/auth/session')) return jsonResponse({ role: 'owner' })
+      if (init?.method === 'PATCH') return jsonResponse(inventoryRow)
+      if (url.endsWith('/api/inventory')) return jsonResponse([inventoryRow])
+      return jsonResponse([])
+    })
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+    await user.click(await screen.findByRole('button', { name: 'Редактировать препарат' }))
+    expect(screen.getByLabelText('Действующее вещество')).toHaveProperty('value', 'ТЕСТ действующее вещество')
+    expect(screen.getByLabelText('Расход на м² / литр')).toHaveProperty('value', 'ТЕСТ расход')
+    await user.clear(screen.getByLabelText('Заметка об устойчивости'))
+    await user.type(screen.getByLabelText('Заметка об устойчивости'), 'Обновлено')
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true))
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!
+    expect(call[1]?.credentials).toBe('include')
+    expect(JSON.parse(String(call[1]?.body))).toMatchObject({ resistance_note: 'Обновлено', dosage_note: 'ТЕСТ расход', pest_tags: ['клопы'] })
+  }, 15000)
 })

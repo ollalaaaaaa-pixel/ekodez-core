@@ -467,6 +467,16 @@ class Inventory(Base):
     batch_number: Mapped[str] = mapped_column(String(100))
     expiry_date: Mapped[date] = mapped_column(Date, index=True)
     supplier: Mapped[str] = mapped_column(String(200), index=True)
+    active_substance: Mapped[str | None] = mapped_column(String(300))
+    resistance_note: Mapped[str | None] = mapped_column(Text)
+    alternatives: Mapped[list[int]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    dosage_note: Mapped[str | None] = mapped_column(Text)
+    hazard_class: Mapped[str | None] = mapped_column(String(100))
+    pest_tags: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

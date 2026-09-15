@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import update
@@ -10,6 +10,37 @@ from app.models import ChemicalUsage, Inventory, Lead, Object, Treatment
 
 QUANTITY_QUANTUM = Decimal("0.001")
 LOW_STOCK_RATIO = Decimal("0.10")
+PestTag = Literal["клопы", "тараканы", "грызуны", "плесень", "клещи", "муравьи"]
+
+
+class ChemicalFields(BaseModel):
+    active_substance: str | None = Field(default=None, max_length=300)
+    resistance_note: str | None = Field(default=None, max_length=5000)
+    alternatives: list[int] = Field(default_factory=list, max_length=100)
+    dosage_note: str | None = Field(default=None, max_length=5000)
+    hazard_class: str | None = Field(default=None, max_length=100)
+    pest_tags: list[PestTag] = Field(default_factory=list, max_length=6)
+
+    @field_validator("alternatives")
+    @classmethod
+    def valid_alternatives(cls, values: list[int]) -> list[int]:
+        if any(value <= 0 for value in values) or len(set(values)) != len(values):
+            raise ValueError("alternatives must contain unique positive inventory IDs")
+        return values
+
+    @field_validator("pest_tags")
+    @classmethod
+    def unique_tags(cls, values: list[PestTag]) -> list[PestTag]:
+        return list(dict.fromkeys(values))
+
+
+def validate_alternatives(
+    session: Session, ids: list[int], current_id: int | None = None
+) -> None:
+    if current_id in ids or any(
+        session.get(Inventory, item_id) is None for item_id in ids
+    ):
+        raise ValueError("Выберите существующие альтернативы, кроме самого препарата")
 
 
 class InventoryNotFound(ValueError):
@@ -24,7 +55,7 @@ class RelatedRecordExists(ValueError):
     pass
 
 
-class InventoryIn(BaseModel):
+class InventoryIn(ChemicalFields):
     chemical_name: str = Field(min_length=1, max_length=200)
     quantity: Decimal = Field(gt=0)
     unit: str = Field(min_length=1, max_length=30)
@@ -41,7 +72,7 @@ class InventoryIn(BaseModel):
         return stripped
 
 
-class InventoryUpdate(BaseModel):
+class InventoryUpdate(ChemicalFields):
     chemical_name: str | None = Field(default=None, min_length=1, max_length=200)
     quantity: Decimal | None = Field(default=None, ge=0)
     unit: str | None = Field(default=None, min_length=1, max_length=30)
@@ -62,7 +93,10 @@ class InventoryUpdate(BaseModel):
     @model_validator(mode="after")
     def reject_explicit_nulls(self) -> Self:
         for field in self.model_fields_set:
-            if getattr(self, field) is None:
+            if (
+                field not in ChemicalFields.model_fields
+                and getattr(self, field) is None
+            ):
                 raise ValueError(f"{field} cannot be null")
         return self
 
@@ -77,6 +111,12 @@ class InventoryOut(BaseModel):
     expiry_date: date
     supplier: str
     low_stock: bool
+    active_substance: str | None
+    resistance_note: str | None
+    alternatives: list[int]
+    dosage_note: str | None
+    hazard_class: str | None
+    pest_tags: list[str]
 
 
 class ChemicalUsageIn(BaseModel):
@@ -145,6 +185,12 @@ def serialize_inventory(row: Inventory) -> InventoryOut:
         expiry_date=row.expiry_date,
         supplier=row.supplier,
         low_stock=is_low_stock(row),
+        active_substance=row.active_substance,
+        resistance_note=row.resistance_note,
+        alternatives=row.alternatives,
+        dosage_note=row.dosage_note,
+        hazard_class=row.hazard_class,
+        pest_tags=row.pest_tags,
     )
 
 

@@ -14,10 +14,22 @@ from sqlalchemy.pool import StaticPool
 from alembic import command
 from app import main
 from app.models import Base, ChemicalUsage, Object, Treatment
+from tests.auth_helpers import login_telegram
 
 
 class InventoryApiTest(unittest.TestCase):
     def setUp(self):
+        auth_env = patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_BOT_TOKEN": "synthetic-inventory-token",
+                "OWNER_TG_ID": "101",
+                "ALEXEY_TG_ID": "202",
+                "HTTPS_ENABLED": "0",
+            },
+        )
+        auth_env.start()
+        self.addCleanup(auth_env.stop)
         self.original_engine = main.engine
         self.engine = main.create_app_engine(
             "sqlite:///:memory:",
@@ -27,6 +39,10 @@ class InventoryApiTest(unittest.TestCase):
         Base.metadata.create_all(self.engine)
         main.engine = self.engine
         self.client = TestClient(main.app, client=("127.0.0.1", 51000))
+        self.assertEqual(
+            login_telegram(self.client, 101, "synthetic-inventory-token").status_code,
+            200,
+        )
         with Session(self.engine) as session:
             service_object = Object(
                 name="СК Ворон",
@@ -91,6 +107,94 @@ class InventoryApiTest(unittest.TestCase):
         )
         duplicate = self.client.post("/api/inventory", json=payload)
         self.assertEqual(duplicate.status_code, 409)
+
+    def test_dictionary_partial_edit_alternatives_and_owner_guard(self):
+        other = self.client.post(
+            "/api/inventory", json=self._inventory_payload("Альтернатива")
+        ).json()
+        row = self.client.post(
+            "/api/inventory",
+            json={
+                **self._inventory_payload(),
+                "active_substance": "ТЕСТ вещество",
+                "resistance_note": "Заметка владельца",
+                "alternatives": [other["id"]],
+                "dosage_note": "По инструкции",
+                "hazard_class": "ТЕСТ",
+                "pest_tags": ["клопы"],
+            },
+        ).json()
+        path = f"/api/inventory/{row['id']}"
+        updated = self.client.patch(path, json={"hazard_class": None})
+        self.assertEqual(updated.status_code, 200)
+        self.assertIsNone(updated.json()["hazard_class"])
+        self.assertEqual(updated.json()["dosage_note"], "По инструкции")
+        self.assertEqual(updated.json()["alternatives"], [other["id"]])
+        self.assertEqual(
+            self.client.patch(path, json={"alternatives": [row["id"]]}).status_code, 422
+        )
+        self.assertEqual(
+            self.client.patch(path, json={"alternatives": [99999]}).status_code, 422
+        )
+        self.assertEqual(
+            self.client.patch(path, json={"pest_tags": ["неизвестный"]}).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.delete(f"/api/inventory/{other['id']}").status_code, 409
+        )
+        self.assertEqual(
+            login_telegram(self.client, 202, "synthetic-inventory-token").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.patch(path, json={"dosage_note": "Изменение"}).status_code, 403
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/inventory", json=self._inventory_payload()
+            ).status_code,
+            403,
+        )
+        self.assertEqual(self.client.delete(path).status_code, 403)
+        self.assertEqual(self.client.get("/api/inventory").status_code, 200)
+        self.client.cookies.clear()
+        self.assertEqual(
+            self.client.patch(path, json={"dosage_note": "Изменение"}).status_code, 401
+        )
+
+    def test_recommend_matches_tag_positive_stock_and_descending_quantity(self):
+        for name, quantity, tags in [
+            ("Мало", "2", ["клопы"]),
+            ("Много", "10", ["клопы", "тараканы"]),
+            ("Иной", "20", ["клещи"]),
+            ("Пусто", "1", ["клопы"]),
+        ]:
+            created = self.client.post(
+                "/api/inventory",
+                json={**self._inventory_payload(name, quantity), "pest_tags": tags},
+            ).json()
+            if name == "Пусто":
+                self.client.patch(
+                    f"/api/inventory/{created['id']}", json={"quantity": "0"}
+                )
+        result = self.client.get("/api/inventory/recommend", params={"pest": "клопы"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(
+            [row["chemical_name"] for row in result.json()], ["Много", "Мало"]
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/inventory/recommend", params={"pest": "муравьи"}
+            ).json(),
+            [],
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/inventory/recommend", params={"pest": "Дезинсекция"}
+            ).status_code,
+            422,
+        )
 
     def test_treatment_atomically_decrements_inventory_and_records_usage(self):
         first = self.client.post(

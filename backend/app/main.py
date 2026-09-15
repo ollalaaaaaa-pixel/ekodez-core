@@ -75,10 +75,12 @@ from app.inventory import (
     InventoryOut,
     InventoryTreatmentOut,
     InventoryUpdate,
+    PestTag,
     TreatmentIn,
     create_treatment_with_inventory,
     serialize_inventory,
     serialize_inventory_treatment,
+    validate_alternatives,
 )
 from app.lead_dictionaries import LEAD_SOURCES, source_from_utm
 from app.lead_parser import parse_amount_note, parse_order_text
@@ -610,10 +612,26 @@ def list_inventory(
         return [serialize_inventory(row) for row in session.scalars(statement).all()]
 
 
+@app.get("/api/inventory/recommend", response_model=list[InventoryOut])
+def recommend_inventory(pest: PestTag):
+    with Session(engine) as session:
+        rows = session.scalars(
+            select(Inventory)
+            .where(Inventory.quantity > 0)
+            .order_by(Inventory.quantity.desc(), Inventory.id)
+        )
+        return [serialize_inventory(row) for row in rows if pest in row.pest_tags]
+
+
 @app.post("/api/inventory", response_model=InventoryOut)
-def create_inventory(payload: InventoryIn):
+def create_inventory(payload: InventoryIn, request: Request):
+    require_owner(request)
     row = Inventory(**payload.model_dump(), initial_quantity=payload.quantity)
     with Session(engine) as session:
+        try:
+            validate_alternatives(session, payload.alternatives)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         try:
             session.add(row)
             session.commit()
@@ -627,11 +645,16 @@ def create_inventory(payload: InventoryIn):
 
 
 @app.patch("/api/inventory/{inventory_id}", response_model=InventoryOut)
-def update_inventory(inventory_id: int, payload: InventoryUpdate):
+def update_inventory(inventory_id: int, payload: InventoryUpdate, request: Request):
+    require_owner(request)
     with Session(engine) as session:
         row = session.get(Inventory, inventory_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
+        try:
+            validate_alternatives(session, payload.alternatives, inventory_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(row, field, value)
         try:
@@ -646,7 +669,8 @@ def update_inventory(inventory_id: int, payload: InventoryUpdate):
 
 
 @app.delete("/api/inventory/{inventory_id}", status_code=204)
-def delete_inventory(inventory_id: int):
+def delete_inventory(inventory_id: int, request: Request):
+    require_owner(request)
     with Session(engine) as session:
         row = session.get(Inventory, inventory_id)
         if row is None:
@@ -656,6 +680,13 @@ def delete_inventory(inventory_id: int):
         )
         if linked_usage is not None:
             raise HTTPException(status_code=409, detail="inventory has usage history")
+        if any(
+            inventory_id in item.alternatives
+            for item in session.scalars(select(Inventory))
+        ):
+            raise HTTPException(
+                status_code=409, detail="Препарат указан как альтернатива"
+            )
         session.delete(row)
         session.commit()
         return Response(status_code=204)

@@ -5,6 +5,7 @@ import {
 } from 'antd'
 import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
 import { API } from './api'
+import { ChemicalRecommendations } from './ChemicalDictionary'
 import { INCOME_CATEGORIES, LEAD_SOURCES, LEAD_SOURCE_LABELS } from './dictionaries'
 import './LeadsPage.css'
 
@@ -343,6 +344,7 @@ export default function LeadsPage() {
                     <span>Сумма: {lead.amount} ₽</span>
                   </div>
                   {mobileActions(lead)}
+                  <ChemicalRecommendations category={lead.category} />
                 </Card>
               )
             })}
@@ -403,6 +405,7 @@ export default function LeadsPage() {
         destroyOnHidden
       >
         <Form form={editForm} layout="vertical" onFinish={saveEdit}>
+          {editing ? <ChemicalRecommendations key={editing.id} category={editing.category} /> : null}
           <Form.Item name="amount" label="Сумма" rules={[{ required: true }]}>
             <InputNumber stringMode min="0" precision={2} style={{ width: '100%' }} />
           </Form.Item>
