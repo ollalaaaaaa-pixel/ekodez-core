@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 import time
@@ -10,17 +11,95 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
+from app.ads.agent import create_upload_reminders, run_ads_weekly
+from app.ads.config import AdsConfigError, load_ads_config
+from app.ads.importer import import_ads_file
 from app.auto_contract_packages import DocumentGenerator
 from app.reports.daily import (
     reports_configured,
     send_daily_report,
     successful_auto_exists,
 )
+from app.tg_poller import send_message
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CHECK_HOURS = (9, 10, 11, 12, 13)
 CHECK_MINUTE = 10
 _scheduler_started = False
+_ads_job_runs: set[str] = set()
+
+
+def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
+    local = now.astimezone(MOSCOW_TZ)
+    if local.weekday() != 0 or local.hour != 9 or local.minute not in {15, 20, 30}:
+        return ()
+    job = {15: "import", 20: "reminders", 30: "weekly"}[local.minute]
+    run_key = f"{local.date().isoformat()}:{job}"
+    if run_key in _ads_job_runs:
+        return ()
+    try:
+        config = load_ads_config()
+    except AdsConfigError:
+        _warning("ads_scheduler_degraded")
+        return ()
+    if job == "import":
+        with Session(engine) as session:
+            for platform, settings in config.platforms.items():
+                if settings.mode == "disabled":
+                    continue
+                folder = config.root / platform
+                for path in sorted(folder.glob("*")):
+                    if path.suffix.lower() in {".csv", ".xlsx", ".xls"}:
+                        try:
+                            import_ads_file(session, platform, path, now=local)
+                            session.commit()
+                        except Exception as error:
+                            session.commit()
+                            _warning("ads_import_failed", error)
+                            token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+                            owner = os.getenv("OWNER_TG_ID", "").strip()
+                            if token and owner.isdigit():
+                                send_message(
+                                    token,
+                                    int(owner),
+                                    f"Ошибка импорта рекламы {platform}: {path.name}; "
+                                    f"{str(error)[:160]}",
+                                )
+    elif job == "reminders":
+        with Session(engine) as session:
+            reminders = create_upload_reminders(session, config, local)
+            session.commit()
+        if reminders:
+            token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            owner = os.getenv("OWNER_TG_ID", "").strip()
+            if token and owner.isdigit():
+                for row in reminders:
+                    instructions = row.payload.get("instructions", [])
+                    if not isinstance(instructions, list):
+                        instructions = []
+                    instruction_lines = "\n".join(
+                        f"• {item}" for item in instructions if isinstance(item, str)
+                    )
+                    send_message(
+                        token,
+                        int(owner),
+                        "Пора обновить рекламную выгрузку\n"
+                        f"Площадка: {row.payload.get('platform')}\n"
+                        f"Папка: {row.payload.get('folder')}\n"
+                        f"{instruction_lines}",
+                    )
+    else:
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        owner = os.getenv("OWNER_TG_ID", "").strip()
+
+        def owner_sender(message: str) -> bool:
+            return bool(
+                token and owner.isdigit() and send_message(token, int(owner), message)
+            )
+
+        run_ads_weekly(engine, local, owner_sender)
+    _ads_job_runs.add(run_key)
+    return (job,)
 
 
 def within_catchup_window(now: datetime) -> bool:
@@ -78,10 +157,11 @@ def _scheduler_loop(
         now = datetime.now(MOSCOW_TZ)
         try:
             run_due_auto(engine, now, auto_package_generator)
+            run_due_ads_jobs(engine, now)
         except Exception as error:
             _warning("reports_scheduler_attempt_failed", error)
         target = next_check_at(now)
-        delay = max(1.0, (target - datetime.now(MOSCOW_TZ)).total_seconds())
+        delay = min(60.0, max(1.0, (target - datetime.now(MOSCOW_TZ)).total_seconds()))
         time.sleep(delay)
 
 

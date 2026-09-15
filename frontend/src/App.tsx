@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Layout, Menu, Typography, Card, Spin } from 'antd'
+import { Alert, Badge, Button, Layout, Menu, Typography, Card, Spin } from 'antd'
 import {
   CalendarOutlined,
   DollarOutlined,
@@ -9,6 +9,8 @@ import {
   ExperimentOutlined,
   TeamOutlined,
   SettingOutlined,
+  NotificationOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import DayPage from './DayPage'
 import FinancePage from './FinancePage'
@@ -18,7 +20,9 @@ import InventoryPage from './InventoryPage'
 import DashboardPage from './DashboardPage'
 import ClientsPage from './ClientsPage'
 import SettingsPage from './SettingsPage'
-import { authenticateTelegramMiniApp, telegramMiniAppInitData } from './auth'
+import AdsPage from './AdsPage'
+import type { AuthSession } from './auth'
+import { authenticateTelegramMiniApp, getAuthSession, telegramMiniAppInitData } from './auth'
 
 const { Header, Sider, Content } = Layout
 const { Title } = Typography
@@ -32,28 +36,43 @@ const screens: Record<string, string> = {
   dashboard: 'Дашборд',
   clients: 'Клиенты',
   settings: 'Настройки',
+  ads: 'Реклама',
 }
 
 export default function App() {
   const [current, setCurrent] = useState('day')
   const initData = telegramMiniAppInitData()
-  const [authState, setAuthState] = useState<'checking' | 'ready' | 'error'>(
-    initData ? 'checking' : 'ready',
-  )
+  const [authState, setAuthState] = useState<'checking' | 'ready' | 'error'>('checking')
   const [authError, setAuthError] = useState('')
+  const [role, setRole] = useState<AuthSession['role'] | null>(null)
+  const [unreadAds, setUnreadAds] = useState(0)
   const authStarted = useRef(false)
 
   useEffect(() => {
-    if (!initData || authStarted.current) return
+    if (authStarted.current) return
     authStarted.current = true
-    window.Telegram?.WebApp?.ready?.()
-    authenticateTelegramMiniApp(initData)
-      .then(() => setAuthState('ready'))
+    if (initData) window.Telegram?.WebApp?.ready?.()
+    const authentication = initData
+      ? authenticateTelegramMiniApp(initData)
+      : getAuthSession().then((session) => ({ role: session.role }))
+    authentication
+      .then((session) => {
+        setRole(session.role)
+        setAuthState('ready')
+      })
       .catch((error: unknown) => {
         setAuthError(error instanceof Error ? error.message : 'Не удалось войти через Telegram')
         setAuthState('error')
       })
   }, [initData])
+
+  useEffect(() => {
+    if (role !== 'owner') return
+    fetch('/api/ads/notifications/unread-count', { credentials: 'include' })
+      .then((response) => response.ok ? response.json() : { count: 0 })
+      .then((body: { count: number }) => setUnreadAds(body.count))
+      .catch(() => setUnreadAds(0))
+  }, [role])
 
   if (authState === 'checking') {
     return <div className="auth-state"><Spin size="large" tip="Вход через Telegram…" /></div>
@@ -80,6 +99,9 @@ export default function App() {
             { key: 'dashboard', icon: <DashboardOutlined />, label: 'Дашборд' },
             { key: 'clients', icon: <TeamOutlined />, label: 'Клиенты' },
             { key: 'settings', icon: <SettingOutlined />, label: 'Настройки' },
+            ...(role === 'owner'
+              ? [{ key: 'ads', icon: <BarChartOutlined />, label: 'Реклама' }]
+              : []),
           ]}
         />
       </Sider>
@@ -88,6 +110,11 @@ export default function App() {
           <Title level={4} className="app-title">
             Ekodez Core — {screens[current]}
           </Title>
+          {role === 'owner' ? (
+            <Badge count={unreadAds}>
+              <Button aria-label="Уведомления рекламы" icon={<NotificationOutlined />} onClick={() => setCurrent('ads')} />
+            </Badge>
+          ) : null}
         </Header>
         <Content className="app-content">
           {current === 'day' ? (
@@ -106,6 +133,8 @@ export default function App() {
             <ClientsPage />
           ) : current === 'settings' ? (
             <SettingsPage />
+          ) : current === 'ads' && role === 'owner' ? (
+            <AdsPage onNotificationsRead={() => setUnreadAds(0)} />
           ) : (
             <Card>
               <p>Экран «{screens[current]}» готовится. Данные появятся после подключения модуля.</p>
