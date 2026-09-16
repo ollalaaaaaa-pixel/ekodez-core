@@ -173,6 +173,12 @@ class GnomIntegrationTest(unittest.TestCase):
         original = main.engine
         main.engine = self.engine
         self.addCleanup(setattr, main, "engine", original)
+        poller = patch.object(main, "start_poller")
+        scheduler = patch.object(main, "start_report_scheduler")
+        poller.start()
+        scheduler.start()
+        self.addCleanup(poller.stop)
+        self.addCleanup(scheduler.stop)
         self.addCleanup(self.engine.dispose)
         self.client = TestClient(main.app, client=("127.0.0.1", 51000))
         self.addCleanup(self.client.close)
@@ -302,7 +308,9 @@ class GnomIntegrationTest(unittest.TestCase):
         ]
         with TestClient(main.app, client=("127.0.0.1", 51001)) as anonymous:
             for method, url, kwargs in cases:
-                self.assertEqual(anonymous.request(method, url, **kwargs).status_code, 403)
+                self.assertEqual(
+                    anonymous.request(method, url, **kwargs).status_code, 403
+                )
         with TestClient(main.app, client=("127.0.0.1", 51002)) as master:
             self.assertEqual(
                 login_telegram(master, 202, "synthetic-gnom-token").status_code,

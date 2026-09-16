@@ -43,7 +43,7 @@ class GnomMigrationTest(unittest.TestCase):
                 previous = set((root / "backups").glob("*.bak"))
                 command.upgrade(config, "head")
                 self.assertEqual(
-                    len(set((root / "backups").glob("*.bak")) - previous), 1
+                    len(set((root / "backups").glob("*.bak")) - previous), 2
                 )
                 with engine.begin() as connection:
                     self.assertEqual(

@@ -258,9 +258,7 @@ def run_due_gnom_job(engine: Engine, now: datetime) -> bool:
     if local.weekday() != 0 or (local.hour, local.minute) < (9, 10):
         return False
     run_key = f"{local.date().isoformat()}:gnom_weekly"
-    if not _claim_job(
-        engine, run_key, "gnom_weekly", local, retry_failed=True
-    ):
+    if not _claim_job(engine, run_key, "gnom_weekly", local, retry_failed=True):
         return False
     try:
         delivered = run_gnom_weekly(engine, local)

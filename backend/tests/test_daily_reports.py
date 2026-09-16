@@ -21,7 +21,15 @@ from sqlalchemy.pool import StaticPool
 
 from alembic import command
 from app import main
-from app.models import Base, Inventory, Lead, Object, SentReport, Transaction
+from app.models import (
+    Base,
+    Inventory,
+    Lead,
+    Object,
+    SchedulerJobRun,
+    SentReport,
+    Transaction,
+)
 from app.security.pii import protect_lead_pii
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -702,6 +710,12 @@ class DailySchedulerTest(unittest.TestCase):
         self.assertEqual(gnom.call_count, 2)
         self.assertEqual(reports.call_count, 2)
         self.assertIn('"event": "gnom_scheduler_attempt_failed"', warning.getvalue())
+        with Session(self.engine) as session:
+            run = session.scalar(
+                select(SchedulerJobRun).where(SchedulerJobRun.job_name == "gnom_weekly")
+            )
+            self.assertIsNotNone(run)
+            self.assertEqual(run.status, "ok")
 
     def test_configured_scheduler_starts_once_and_health_is_ok(self):
         from app.reports import scheduler
