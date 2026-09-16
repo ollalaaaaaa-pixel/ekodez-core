@@ -14,6 +14,9 @@ export const INCOME_CATEGORIES = [
 export const LEAD_SOURCES = [
   { value: 'telegram', label: 'Telegram-бот' },
   { value: 'aggregators', label: 'Агрегаторы' },
+  { value: 'aggregator', label: 'Агрегаторы (история)' },
+  { value: 'yandex', label: 'Яндекс (история)' },
+  { value: 'phone', label: 'Телефон' },
   { value: 'other', label: 'Другое' },
   { value: 'yandex_direct', label: 'Яндекс Директ' },
   { value: 'vk', label: 'ВКонтакте' },

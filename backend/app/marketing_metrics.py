@@ -11,6 +11,7 @@ from app.lead_dictionaries import LEAD_SOURCE_LABELS
 from app.models import Lead, Transaction
 
 MARKETING_CHANNELS = {
+    "aggregators": "Агрегаторы",
     "yandex_direct": "Яндекс",
     "vk": "ВК",
     "avito": "Авито",
@@ -54,14 +55,22 @@ def marketing_metrics(session: Session, start: date, end: date) -> MarketingResu
         t.lead_id for t in transactions if t.kind == "income" and t.lead_id is not None
     }
     linked_sources = {
-        lead_id: source
+        lead_id: {"aggregator": "aggregators", "yandex": "yandex_direct"}.get(
+            source, source
+        )
         for lead_id, source in session.execute(
             select(Lead.id, Lead.source).where(Lead.id.in_(linked_ids))
         ).all()
     }
     rows: list[MarketingRow] = []
     for source in MARKETING_CHANNELS:
-        count = sum(lead.source == source for lead in leads)
+        count = sum(
+            {"aggregator": "aggregators", "yandex": "yandex_direct"}.get(
+                lead.source, lead.source
+            )
+            == source
+            for lead in leads
+        )
         spend = sum(
             (
                 t.amount

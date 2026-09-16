@@ -681,6 +681,27 @@ class DailySchedulerTest(unittest.TestCase):
         thread.return_value.start.assert_called_once()
         self.assertEqual(scheduler.reports_status(), "degraded")
         self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
+        scheduler._scheduler_started = False
+
+    def test_scheduler_iteration_survives_one_job_exception_and_runs_again(self):
+        from app.reports import scheduler
+
+        now = datetime(2026, 9, 14, 9, 10, tzinfo=MOSCOW_TZ)
+        warning = io.StringIO()
+        with (
+            patch(
+                "app.gnom_scheduler.run_gnom_weekly",
+                side_effect=[RuntimeError("synthetic"), False],
+            ) as gnom,
+            patch.object(scheduler, "run_due_auto", return_value=False) as reports,
+            redirect_stderr(warning),
+        ):
+            scheduler._run_scheduler_iteration(self.engine, now)
+            scheduler._run_scheduler_iteration(self.engine, now)
+
+        self.assertEqual(gnom.call_count, 2)
+        self.assertEqual(reports.call_count, 2)
+        self.assertIn('"event": "gnom_scheduler_attempt_failed"', warning.getvalue())
 
     def test_configured_scheduler_starts_once_and_health_is_ok(self):
         from app.reports import scheduler

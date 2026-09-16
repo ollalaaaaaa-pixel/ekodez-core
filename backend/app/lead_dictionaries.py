@@ -3,6 +3,9 @@
 LEAD_SOURCE_LABELS: dict[str, str] = {
     "telegram": "Telegram-бот",
     "aggregators": "Агрегаторы",
+    "aggregator": "Агрегаторы (история)",
+    "yandex": "Яндекс (история)",
+    "phone": "Телефон",
     "other": "Другое",
     "yandex_direct": "Яндекс Директ",
     "vk": "ВКонтакте",

@@ -17,6 +17,7 @@ import FinancePage from './FinancePage'
 import LeadsPage from './LeadsPage'
 import ObjectsPage from './ObjectsPage'
 import InventoryPage from './InventoryPage'
+import GnomPage from './GnomPage'
 import DashboardPage from './DashboardPage'
 import ClientsPage from './ClientsPage'
 import SettingsPage from './SettingsPage'
@@ -37,10 +38,13 @@ const screens: Record<string, string> = {
   clients: 'Клиенты',
   settings: 'Настройки',
   ads: 'Реклама',
+  gnom: 'История Гном',
 }
 
 export default function App() {
   const [current, setCurrent] = useState('day')
+  const [mobileLayout, setMobileLayout] = useState(() => window.innerWidth < 992)
+  const [menuCollapsed, setMenuCollapsed] = useState(() => window.innerWidth < 992)
   const initData = telegramMiniAppInitData()
   const [authState, setAuthState] = useState<'checking' | 'ready' | 'error'>('checking')
   const [authError, setAuthError] = useState('')
@@ -83,13 +87,25 @@ export default function App() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider breakpoint="lg" collapsedWidth="0">
+      <Sider
+        breakpoint="lg"
+        collapsedWidth="0"
+        collapsed={menuCollapsed}
+        onCollapse={setMenuCollapsed}
+        onBreakpoint={(broken) => {
+          setMobileLayout(broken)
+          if (broken) setMenuCollapsed(true)
+        }}
+      >
         <div className="app-logo">ЭКОДЕЗ</div>
         <Menu
           theme="dark"
           mode="inline"
           selectedKeys={[current]}
-          onClick={(e) => setCurrent(e.key)}
+          onClick={(e) => {
+            setCurrent(e.key)
+            if (mobileLayout) setMenuCollapsed(true)
+          }}
           items={[
             { key: 'day', icon: <CalendarOutlined />, label: 'День' },
             { key: 'leads', icon: <FileTextOutlined />, label: 'Заявки' },
@@ -100,7 +116,10 @@ export default function App() {
             { key: 'clients', icon: <TeamOutlined />, label: 'Клиенты' },
             { key: 'settings', icon: <SettingOutlined />, label: 'Настройки' },
             ...(role === 'owner'
-              ? [{ key: 'ads', icon: <BarChartOutlined />, label: 'Реклама' }]
+              ? [
+                  { key: 'ads', icon: <BarChartOutlined />, label: 'Реклама' },
+                  { key: 'gnom', icon: <FileTextOutlined />, label: 'История Гном' },
+                ]
               : []),
           ]}
         />
@@ -135,6 +154,8 @@ export default function App() {
             <SettingsPage />
           ) : current === 'ads' && role === 'owner' ? (
             <AdsPage onNotificationsRead={() => setUnreadAds(0)} />
+          ) : current === 'gnom' && role === 'owner' ? (
+            <GnomPage />
           ) : (
             <Card>
               <p>Экран «{screens[current]}» готовится. Данные появятся после подключения модуля.</p>

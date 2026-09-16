@@ -232,6 +232,10 @@ def run_scheduler_iteration(
     auto_package_generator: DocumentGenerator | None = None,
 ) -> None:
     try:
+        run_due_gnom_job(engine, now)
+    except Exception as error:
+        _warning("gnom_scheduler_attempt_failed", error)
+    try:
         run_due_auto(engine, now, auto_package_generator)
     except Exception as error:
         _warning("daily_report_job_failed", error)
@@ -244,6 +248,37 @@ def run_scheduler_iteration(
 def poll_delay_seconds(now: datetime) -> float:
     target = next_check_at(now)
     return min(60.0, max(1.0, (target - datetime.now(MOSCOW_TZ)).total_seconds()))
+
+
+def run_due_gnom_job(engine: Engine, now: datetime) -> bool:
+    from app.gnom_scheduler import run_gnom_weekly
+    from app.models import GnomWeeklyRun
+
+    local = now.astimezone(MOSCOW_TZ)
+    if local.weekday() != 0 or (local.hour, local.minute) < (9, 10):
+        return False
+    run_key = f"{local.date().isoformat()}:gnom_weekly"
+    if not _claim_job(
+        engine, run_key, "gnom_weekly", local, retry_failed=True
+    ):
+        return False
+    try:
+        delivered = run_gnom_weekly(engine, local)
+        with Session(engine) as session:
+            weekly = session.get(GnomWeeklyRun, local.date())
+            failed = weekly is not None and weekly.status == "failed"
+        if failed:
+            error = RuntimeError("gnom weekly delivery failed")
+            _finish_job(engine, run_key, "failed", local, error)
+            return False
+    except Exception as error:
+        _finish_job(engine, run_key, "failed", local, error)
+        raise
+    _finish_job(engine, run_key, "ok", local)
+    return delivered
+
+
+_run_scheduler_iteration = run_scheduler_iteration
 
 
 def start_report_scheduler(

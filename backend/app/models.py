@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -27,6 +28,75 @@ class Base(DeclarativeBase):
     pass
 
 
+class GnomRecord(Base):
+    __tablename__ = "gnom_records"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    signature: Mapped[str] = mapped_column(String(64), unique=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    phone_hash: Mapped[str] = mapped_column(String(64), index=True)
+    phone_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    address_hash: Mapped[str] = mapped_column(String(64), index=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"), unique=True)
+    object_id: Mapped[int] = mapped_column(ForeignKey("objects.id"))
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    treatment_id: Mapped[int | None] = mapped_column(ForeignKey("treatments.id"))
+    income_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"))
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"))
+    signals: Mapped[dict[str, Any]] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(String(30))
+    deal_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    platform: Mapped[str | None] = mapped_column(String(100))
+    income: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    outcome: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    expense_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created: Mapped[datetime | None] = mapped_column(DateTime)
+    finished: Mapped[bool] = mapped_column(Boolean)
+    cancelled: Mapped[bool] = mapped_column(Boolean)
+
+
+class GnomImportRun(Base):
+    __tablename__ = "gnom_import_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(200))
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)
+    rows: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String(30))
+    error: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class GnomSettings(Base):
+    __tablename__ = "gnom_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    weekly_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    warranty_days: Mapped[int | None] = mapped_column()
+
+
+class GnomPlatformRule(Base):
+    __tablename__ = "gnom_platform_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deal_prefix: Mapped[str] = mapped_column(String(100), unique=True)
+    platform: Mapped[str] = mapped_column(String(100))
+
+
+class GnomCandidate(Base):
+    __tablename__ = "gnom_candidates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    encrypted_value: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    inventory_id: Mapped[int | None] = mapped_column(ForeignKey("inventory.id"))
+
+
+class GnomWeeklyRun(Base):
+    __tablename__ = "gnom_weekly_runs"
+    week: Mapped[date] = mapped_column(Date, primary_key=True)
+    status: Mapped[str] = mapped_column(String(30))
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ConsumedChallenge(Base):
     __tablename__ = "consumed_challenges"
 
@@ -38,7 +108,15 @@ class ConsumedChallenge(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (Index("uq_transactions_lead_id", "lead_id", unique=True),)
+    __table_args__ = (
+        Index(
+            "uq_transactions_lead_id",
+            "lead_id",
+            unique=True,
+            sqlite_where=sql_text("kind = 'income'"),
+            postgresql_where=sql_text("kind = 'income'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(50))
@@ -196,13 +274,14 @@ class Lead(Base):
     __tablename__ = "leads"
     __table_args__ = (
         CheckConstraint(
-            "performed_by IN ('Артём', 'Алексей')",
+            "performed_by IN ('Артём', 'Алексей', 'Не указан (история)')",
             name="ck_leads_performed_by",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(50), default="telegram")
+    is_repeat: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     order_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
