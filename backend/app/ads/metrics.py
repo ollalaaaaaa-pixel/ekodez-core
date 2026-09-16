@@ -17,6 +17,8 @@ class MetricRow:
     revenue: Decimal
     cpl: Decimal | None
     romi: Decimal | None
+    cpl_reason: str | None = None
+    romi_reason: str | None = None
 
     def json(self) -> dict[str, object]:
         data = asdict(self)
@@ -24,6 +26,82 @@ class MetricRow:
             value = data[key]
             data[key] = None if value is None else f"{value:.2f}"
         return data
+
+
+def _lead_ids(
+    session: Session, platform: str, campaign: str | None, start: date, end: date
+) -> list[int]:
+    query = select(Lead.id).where(
+        Lead.attributed_platform == platform,
+        func.date(Lead.created_at) >= start,
+        func.date(Lead.created_at) <= end,
+    )
+    query = (
+        query.where(Lead.utm_campaign.is_(None))
+        if campaign is None
+        else query.where(Lead.utm_campaign == campaign)
+    )
+    return list(session.scalars(query))
+
+
+def _revenue(
+    session: Session, platform: str, campaign: str | None, start: date, end: date
+) -> Decimal:
+    query = (
+        select(func.coalesce(func.sum(Transaction.amount), 0))
+        .join(Lead, Transaction.lead_id == Lead.id)
+        .where(
+            Transaction.kind == "income",
+            Transaction.operation_date >= start,
+            Transaction.operation_date <= end,
+            Lead.attributed_platform == platform,
+        )
+    )
+    query = (
+        query.where(Lead.utm_campaign.is_(None))
+        if campaign is None
+        else query.where(Lead.utm_campaign == campaign)
+    )
+    return Decimal(session.scalar(query) or 0).quantize(Decimal("0.01"))
+
+
+def _row(
+    session: Session,
+    platform: str,
+    campaign: str | None,
+    spend: Decimal,
+    start: date,
+    end: date,
+) -> MetricRow:
+    leads = len(_lead_ids(session, platform, campaign, start, end))
+    revenue = _revenue(session, platform, campaign, start, end)
+    cpl: Decimal | None = None
+    romi: Decimal | None = None
+    cpl_reason: str | None = None
+    romi_reason: str | None = None
+    if not spend:
+        cpl_reason = "no_spend"
+        romi_reason = "no_spend"
+    elif not leads:
+        cpl_reason = "no_attributed_leads"
+        romi_reason = "no_attributed_leads"
+    else:
+        cpl = (spend / leads).quantize(Decimal("0.01"))
+        if not revenue:
+            romi_reason = "no_income_transactions"
+        else:
+            romi = ((revenue - spend) / spend * 100).quantize(Decimal("0.01"))
+    return MetricRow(
+        platform=platform,
+        campaign=campaign or "Без кампании",
+        spend=spend,
+        leads=leads,
+        revenue=revenue,
+        cpl=cpl,
+        romi=romi,
+        cpl_reason=cpl_reason,
+        romi_reason=romi_reason,
+    )
 
 
 def ads_metrics(session: Session, start: date, end: date) -> list[MetricRow]:
@@ -40,45 +118,30 @@ def ads_metrics(session: Session, start: date, end: date) -> list[MetricRow]:
         full_spend = Decimal(spend_row.spend or 0)
         apportioned = (full_spend * overlap_days / total_days).quantize(Decimal("0.01"))
         grouped[key] = grouped.get(key, Decimal("0.00")) + apportioned
-    campaign_counts: dict[str, int] = {}
-    for platform, _ in grouped:
-        campaign_counts[platform] = campaign_counts.get(platform, 0) + 1
-    result: list[MetricRow] = []
-    for (platform, campaign), spend in sorted(grouped.items()):
-        lead_query = select(Lead.id).where(
-            Lead.attributed_platform == platform,
+
+    attributed = session.execute(
+        select(Lead.attributed_platform, Lead.utm_campaign).where(
+            Lead.attributed_platform.is_not(None),
             func.date(Lead.created_at) >= start,
             func.date(Lead.created_at) <= end,
         )
-        if campaign_counts[platform] > 1:
-            lead_query = lead_query.where(Lead.utm_campaign == campaign)
-        lead_ids = session.scalars(lead_query).all()
-        revenue = Decimal("0.00")
-        if lead_ids:
-            revenue = Decimal(
-                session.scalar(
-                    select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                        Transaction.lead_id.in_(lead_ids), Transaction.kind == "income"
-                    )
-                )
-                or 0
-            )
-        leads = len(lead_ids)
-        cpl = (spend / leads).quantize(Decimal("0.01")) if leads else None
-        romi = (
-            ((revenue - spend) / spend * 100).quantize(Decimal("0.01"))
-            if spend
-            else None
-        )
-        result.append(
-            MetricRow(
-                platform,
-                campaign,
-                spend,
-                leads,
-                revenue,
-                cpl,
-                romi,
-            )
-        )
-    return result
+    ).all()
+    campaign_keys = set(grouped)
+    platform_rows: set[str] = set()
+    for platform, campaign in attributed:
+        if platform is None:
+            continue
+        if campaign:
+            campaign_keys.add((platform, campaign))
+        else:
+            platform_rows.add(platform)
+
+    result = [
+        _row(session, platform, campaign, spend, start, end)
+        for (platform, campaign), spend in sorted(grouped.items())
+    ]
+    for platform, campaign in sorted(campaign_keys - set(grouped)):
+        result.append(_row(session, platform, campaign, Decimal("0.00"), start, end))
+    for platform in sorted(platform_rows):
+        result.append(_row(session, platform, None, Decimal("0.00"), start, end))
+    return sorted(result, key=lambda item: (item.platform, item.campaign))

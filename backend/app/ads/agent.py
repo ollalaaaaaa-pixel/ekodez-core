@@ -156,5 +156,19 @@ def run_ads_weekly(
                 )
         session.commit()
     message = "\n".join(lines)
-    sender(message)
-    return {"message": message, "drafts": drafts}
+    delivered = sender(message)
+    if not delivered:
+        delivered = sender(message)
+    if not delivered:
+        with Session(engine) as session:
+            create_notification(
+                session,
+                "ads_delivery_failed",
+                {
+                    "reason": "delivery_failed",
+                    "period": f"{start.isoformat()}-{end.isoformat()}",
+                },
+                now,
+            )
+            session.commit()
+    return {"message": message, "drafts": drafts, "delivered": delivered}

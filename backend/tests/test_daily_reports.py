@@ -665,7 +665,7 @@ class DailySchedulerTest(unittest.TestCase):
             self.assertFalse(scheduler.run_due_auto(self.engine, now))
             send.assert_not_called()
 
-    def test_missing_configuration_is_degraded_and_starts_no_thread(self):
+    def test_missing_daily_configuration_is_degraded_but_scheduler_starts(self):
         from app.reports import scheduler
 
         scheduler._scheduler_started = False
@@ -677,7 +677,8 @@ class DailySchedulerTest(unittest.TestCase):
         ):
             scheduler.start_report_scheduler(self.engine)
 
-        thread.assert_not_called()
+        thread.assert_called_once()
+        thread.return_value.start.assert_called_once()
         self.assertEqual(scheduler.reports_status(), "degraded")
         self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
 

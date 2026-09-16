@@ -13,6 +13,7 @@ ALLOWED_PAYLOAD_FIELDS = {
     "ads_upload_reminder": {"platform", "folder", "instructions", "period_key"},
     "ads_alert": {"platform", "reason", "period", "metrics"},
     "draft_ready": {"platform", "draft_path", "period"},
+    "ads_delivery_failed": {"reason", "period"},
 }
 
 _PLATFORMS = {"yandex_direct", "yandex_business", "2gis"}
@@ -42,7 +43,11 @@ def _safe_value(kind: str, key: str, value: object, platform: str) -> object:
     if key == "folder":
         return f"ads/{platform}"
     if key == "reason":
-        return "Ошибка импорта" if kind == "ads_import_error" else "CPL/нулевые лиды"
+        if kind == "ads_import_error":
+            return "Ошибка импорта"
+        if kind == "ads_delivery_failed":
+            return "Не удалось доставить недельную сводку"
+        return "CPL/нулевые лиды"
     if key in {"period", "period_key"}:
         text = str(value)
         return text if _SAFE_PERIOD.fullmatch(text) else "скрыто"

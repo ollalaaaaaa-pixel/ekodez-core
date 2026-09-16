@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -39,13 +40,19 @@ def attribute_lead(
         return AttributionResult(alias, "utm")
     try:
         phone = decrypt_pii(lead.encrypted_pii).get("phone")
-        digest = phone_hmac(phone or "", key=pii_key)
+        digests = {
+            phone_hmac(item, key=pii_key)
+            for item in re.split(r"\s*;\s*", phone or "")
+            if item.strip()
+        }
     except (ValueError, PhoneHashError):
+        return AttributionResult(None, None)
+    if not digests:
         return AttributionResult(None, None)
     center = lead.order_at or lead.created_at
     matches = session.scalars(
         select(AdCallLog).where(
-            AdCallLog.phone_hash == digest,
+            AdCallLog.phone_hash.in_(digests),
             AdCallLog.call_date >= center - timedelta(days=7),
             AdCallLog.call_date <= center + timedelta(days=7),
         )

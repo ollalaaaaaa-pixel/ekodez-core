@@ -8,13 +8,14 @@ from datetime import time as datetime_time
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from app.ads.agent import create_upload_reminders, run_ads_weekly
-from app.ads.config import AdsConfigError, load_ads_config
+from app.ads.config import load_ads_config
 from app.ads.importer import import_ads_file
 from app.auto_contract_packages import DocumentGenerator
+from app.models import SchedulerJobRun
 from app.reports.daily import (
     reports_configured,
     send_daily_report,
@@ -26,7 +27,58 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CHECK_HOURS = (9, 10, 11, 12, 13)
 CHECK_MINUTE = 10
 _scheduler_started = False
-_ads_job_runs: set[str] = set()
+
+
+def _claim_job(
+    engine: Engine,
+    run_key: str,
+    job_name: str,
+    scheduled_for: datetime,
+    *,
+    retry_failed: bool = False,
+) -> bool:
+    with Session(engine) as session:
+        existing = session.scalar(
+            select(SchedulerJobRun).where(SchedulerJobRun.run_key == run_key)
+        )
+        if existing is not None:
+            if not retry_failed or existing.status != "failed":
+                return False
+            existing.status = "running"
+            existing.started_at = scheduled_for
+            existing.finished_at = None
+            existing.error_type = None
+        else:
+            session.add(
+                SchedulerJobRun(
+                    run_key=run_key,
+                    job_name=job_name,
+                    scheduled_for=scheduled_for,
+                    status="running",
+                    started_at=scheduled_for,
+                )
+            )
+        session.commit()
+    return True
+
+
+def _finish_job(
+    engine: Engine,
+    run_key: str,
+    status: Literal["ok", "failed"],
+    finished_at: datetime,
+    error: Exception | None = None,
+) -> None:
+    with Session(engine) as session:
+        row = session.scalar(
+            select(SchedulerJobRun).where(SchedulerJobRun.run_key == run_key)
+        )
+        if row is None:
+            return
+        row.status = status
+        row.finished_at = finished_at
+        row.error_type = type(error).__name__ if error is not None else None
+        session.commit()
 
 
 def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
@@ -34,46 +86,43 @@ def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
     if local.weekday() != 0 or local.hour != 9 or local.minute not in {15, 20, 30}:
         return ()
     job = {15: "import", 20: "reminders", 30: "weekly"}[local.minute]
-    run_key = f"{local.date().isoformat()}:{job}"
-    if run_key in _ads_job_runs:
+    job_name = f"ads_{job}"
+    run_key = f"{local.date().isoformat()}:{job_name}"
+    if not _claim_job(engine, run_key, job_name, local):
         return ()
     try:
         config = load_ads_config()
-    except AdsConfigError:
-        _warning("ads_scheduler_degraded")
-        return ()
-    if job == "import":
-        with Session(engine) as session:
-            for platform, settings in config.platforms.items():
-                if settings.mode == "disabled":
-                    continue
-                folder = config.root / platform
-                for path in sorted(folder.glob("*")):
-                    if path.suffix.lower() in {".csv", ".xlsx", ".xls"}:
-                        try:
-                            import_ads_file(session, platform, path, now=local)
-                            session.commit()
-                        except Exception as error:
-                            session.commit()
-                            _warning("ads_import_failed", error)
-                            token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-                            owner = os.getenv("OWNER_TG_ID", "").strip()
-                            if token and owner.isdigit():
-                                send_message(
-                                    token,
-                                    int(owner),
-                                    f"Ошибка импорта рекламы {platform}: "
-                                    f"{type(error).__name__}; данные файла скрыты",
-                                )
-    elif job == "reminders":
-        with Session(engine) as session:
-            reminders = create_upload_reminders(session, config, local)
-            session.commit()
-            reminder_payloads = [dict(row.payload) for row in reminders]
-        if reminder_payloads:
+        if job == "import":
+            with Session(engine) as session:
+                for platform, settings in config.platforms.items():
+                    if settings.mode == "disabled":
+                        continue
+                    folder = config.root / platform
+                    for path in sorted(folder.glob("*")):
+                        if path.suffix.lower() in {".csv", ".xlsx", ".xls"}:
+                            try:
+                                import_ads_file(session, platform, path, now=local)
+                                session.commit()
+                            except Exception as error:
+                                session.commit()
+                                _warning("ads_import_failed", error)
+                                token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+                                owner = os.getenv("OWNER_TG_ID", "").strip()
+                                if token and owner.isdigit():
+                                    send_message(
+                                        token,
+                                        int(owner),
+                                        f"Ошибка импорта рекламы {platform}: "
+                                        f"{type(error).__name__}; данные файла скрыты",
+                                    )
+        elif job == "reminders":
+            with Session(engine) as session:
+                reminders = create_upload_reminders(session, config, local)
+                session.commit()
+                reminder_payloads = [dict(row.payload) for row in reminders]
             token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
             owner = os.getenv("OWNER_TG_ID", "").strip()
-            if token and owner.isdigit():
+            if reminder_payloads and token and owner.isdigit():
                 for payload in reminder_payloads:
                     instructions = payload.get("instructions", [])
                     if not isinstance(instructions, list):
@@ -89,17 +138,25 @@ def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
                         f"Папка: {payload.get('folder')}\n"
                         f"{instruction_lines}",
                     )
-    else:
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        owner = os.getenv("OWNER_TG_ID", "").strip()
+        else:
+            token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            owner = os.getenv("OWNER_TG_ID", "").strip()
 
-        def owner_sender(message: str) -> bool:
-            return bool(
-                token and owner.isdigit() and send_message(token, int(owner), message)
-            )
+            def owner_sender(message: str) -> bool:
+                return bool(
+                    token
+                    and owner.isdigit()
+                    and send_message(token, int(owner), message)
+                )
 
-        run_ads_weekly(engine, local, owner_sender)
-    _ads_job_runs.add(run_key)
+            result = run_ads_weekly(engine, local, owner_sender)
+            if not result.get("delivered"):
+                raise RuntimeError("weekly delivery failed")
+    except Exception as error:
+        _finish_job(engine, run_key, "failed", local, error)
+        _warning("ads_scheduler_job_failed", error)
+        return ()
+    _finish_job(engine, run_key, "ok", local)
     return (job,)
 
 
@@ -129,18 +186,27 @@ def run_due_auto(
 ) -> bool:
     if not within_catchup_window(now):
         return False
+    local = now.astimezone(MOSCOW_TZ)
     with Session(engine) as session:
         if successful_auto_exists(session, now.astimezone(MOSCOW_TZ).date()):
             return False
-    if auto_package_generator is None:
-        send_daily_report(engine, "auto", now)
-    else:
-        send_daily_report(
-            engine,
-            "auto",
-            now,
-            auto_package_generator=auto_package_generator,
-        )
+    run_key = f"{local.date().isoformat()}:daily_auto"
+    if not _claim_job(engine, run_key, "daily_auto", local, retry_failed=True):
+        return False
+    try:
+        if auto_package_generator is None:
+            send_daily_report(engine, "auto", now)
+        else:
+            send_daily_report(
+                engine,
+                "auto",
+                now,
+                auto_package_generator=auto_package_generator,
+            )
+    except Exception as error:
+        _finish_job(engine, run_key, "failed", local, error)
+        raise
+    _finish_job(engine, run_key, "ok", local)
     return True
 
 
@@ -156,14 +222,28 @@ def _scheduler_loop(
 ) -> None:
     while True:
         now = datetime.now(MOSCOW_TZ)
-        try:
-            run_due_auto(engine, now, auto_package_generator)
-            run_due_ads_jobs(engine, now)
-        except Exception as error:
-            _warning("reports_scheduler_attempt_failed", error)
-        target = next_check_at(now)
-        delay = min(60.0, max(1.0, (target - datetime.now(MOSCOW_TZ)).total_seconds()))
-        time.sleep(delay)
+        run_scheduler_iteration(engine, now, auto_package_generator)
+        time.sleep(poll_delay_seconds(now))
+
+
+def run_scheduler_iteration(
+    engine: Engine,
+    now: datetime,
+    auto_package_generator: DocumentGenerator | None = None,
+) -> None:
+    try:
+        run_due_auto(engine, now, auto_package_generator)
+    except Exception as error:
+        _warning("daily_report_job_failed", error)
+    try:
+        run_due_ads_jobs(engine, now)
+    except Exception as error:
+        _warning("ads_scheduler_job_failed", error)
+
+
+def poll_delay_seconds(now: datetime) -> float:
+    target = next_check_at(now)
+    return min(60.0, max(1.0, (target - datetime.now(MOSCOW_TZ)).total_seconds()))
 
 
 def start_report_scheduler(
@@ -174,9 +254,7 @@ def start_report_scheduler(
     if _scheduler_started:
         return
     if not reports_configured():
-        _scheduler_started = False
         _warning("reports_scheduler_degraded")
-        return
     thread = threading.Thread(
         target=_scheduler_loop,
         args=(engine, auto_package_generator),

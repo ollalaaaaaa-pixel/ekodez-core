@@ -321,7 +321,8 @@ class Notification(Base):
     __table_args__ = (
         CheckConstraint(
             "kind IN ('ads_import_ok', 'ads_import_error', "
-            "'ads_upload_reminder', 'ads_alert', 'draft_ready')",
+            "'ads_upload_reminder', 'ads_alert', 'draft_ready', "
+            "'ads_delivery_failed')",
             name="ck_notifications_kind",
         ),
     )
@@ -335,6 +336,32 @@ class Notification(Base):
     read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class SchedulerJobRun(Base):
+    __tablename__ = "scheduler_job_runs"
+    __table_args__ = (
+        UniqueConstraint("run_key", name="uq_scheduler_job_runs_run_key"),
+        CheckConstraint(
+            "status IN ('running', 'ok', 'failed')",
+            name="ck_scheduler_job_runs_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    job_name: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class TelegramMasterDraft(Base):

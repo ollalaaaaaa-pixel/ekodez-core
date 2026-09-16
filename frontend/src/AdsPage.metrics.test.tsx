@@ -10,8 +10,10 @@ describe('advertising metric period and nulls', () => {
     )
   })
 
-  it('shows a dash for unavailable metric values', () => {
-    expect(metricValue(null)).toBe('—')
-    expect(metricValue('125.00')).toBe('125.00')
+  it('shows an explicit reason for unavailable metric values', () => {
+    expect(metricValue(null, 'no_spend')).toBe('Нет данных о расходах')
+    expect(metricValue(null, 'no_income_transactions')).toBe('Нет оплат за период')
+    expect(metricValue(null, 'no_attributed_leads')).toBe('Нет атрибутированных лидов')
+    expect(metricValue('125.00', null)).toBe('125.00')
   })
 })

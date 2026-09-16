@@ -69,7 +69,13 @@ class AdsMigrationTest(unittest.TestCase):
                 self.assertGreaterEqual(len(backups), 2)
                 self.assertEqual(len(migration_backup.sha256(backups[-1])), 64)
                 self.assertTrue(
-                    {"ad_spend", "ad_call_log", "ad_import_runs", "notifications"}
+                    {
+                        "ad_spend",
+                        "ad_call_log",
+                        "ad_import_runs",
+                        "notifications",
+                        "scheduler_job_runs",
+                    }
                     <= set(schema.get_table_names())
                 )
                 lead_columns = {

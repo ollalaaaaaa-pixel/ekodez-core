@@ -115,6 +115,7 @@ class AdsReminderAgentTest(unittest.TestCase):
                         created_at=self.now - timedelta(days=10),
                         attributed_platform="2gis",
                         attribution_method="manual",
+                        utm_campaign="card",
                     ),
                     Lead(
                         source="2gis",
@@ -124,6 +125,7 @@ class AdsReminderAgentTest(unittest.TestCase):
                         created_at=self.now - timedelta(days=3),
                         attributed_platform="2gis",
                         attribution_method="manual",
+                        utm_campaign="card",
                     ),
                 ]
             )
@@ -148,6 +150,22 @@ class AdsReminderAgentTest(unittest.TestCase):
             )
             smtp.assert_not_called()
             smtp_ssl.assert_not_called()
+
+    def test_weekly_delivery_retries_once_then_records_failed_notification(self):
+        sender_calls: list[str] = []
+        with patch("app.ads.agent.load_ads_config", return_value=self.config):
+            result = run_ads_weekly(
+                self.engine,
+                self.now,
+                lambda message: not sender_calls.append(message) and False,
+            )
+        self.assertEqual(len(sender_calls), 2)
+        self.assertFalse(result["delivered"])
+        with Session(self.engine) as session:
+            failures = session.scalars(
+                select(Notification).where(Notification.kind == "ads_delivery_failed")
+            ).all()
+            self.assertEqual(len(failures), 1)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from openpyxl import Workbook
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -81,6 +82,23 @@ class AdsServicesTest(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(Decimal(rows[0].spend), Decimal("1200.00"))
 
+    def test_import_uses_explicit_report_period_end(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "september.csv"
+            path.write_text(
+                "Кампания;Начало периода;Конец периода;Расход\n"
+                "Поиск;01.09.2026;30.09.2026;1000\n",
+                encoding="utf-8",
+            )
+            with Session(self.engine) as session:
+                summary = import_ads_file(
+                    session, "yandex_direct", path, pii_key=self.key
+                )
+                session.commit()
+                run = session.scalar(select(AdImportRun))
+                self.assertEqual(summary.period, "2026-09-01..2026-09-30")
+                self.assertEqual(run.period_end, date(2026, 9, 30))
+
     def test_import_error_creates_safe_error_journal_and_notification(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "broken.csv"
@@ -113,6 +131,56 @@ class AdsServicesTest(unittest.TestCase):
                 self.assertNotIn("example.ru", stored)
                 self.assertRegex(run.source_file, r"^file-[0-9a-f]{12}\.csv$")
 
+    def test_all_import_formats_and_error_payloads_store_no_plain_pii(self):
+        phone = "+79215559876"
+        name = "ТестовыйКлиент"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            csv_path = root / f"{name}-{phone}.csv"
+            csv_path.write_text(
+                f"Дата звонка;Телефон\n08.09.2026;{phone}\n", encoding="utf-8"
+            )
+            xlsx_path = root / f"{name}-{phone}.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            assert sheet is not None
+            sheet.append(["Дата звонка", "Телефон"])
+            sheet.append(["09.09.2026", phone])
+            workbook.save(xlsx_path)
+            xls_path = root / f"{name}-{phone}.xls"
+            xls_path.write_text(
+                f"<table><tr><th>Дата звонка</th><th>Телефон</th></tr>"
+                f"<tr><td>10.09.2026</td><td>{phone}</td></tr></table>",
+                encoding="utf-8",
+            )
+            broken = root / f"{name}-{phone}-broken.csv"
+            broken.write_text("bad;header\n1;2\n", encoding="utf-8")
+            with Session(self.engine) as session:
+                for path in (csv_path, xlsx_path, xls_path):
+                    import_ads_file(session, "2gis", path, pii_key=self.key)
+                    session.commit()
+                with self.assertRaises(AdsParseError):
+                    import_ads_file(session, "2gis", broken, pii_key=self.key)
+                session.commit()
+                stored = repr(
+                    (
+                        [
+                            (row.phone_hash, row.source_file)
+                            for row in session.scalars(select(AdCallLog)).all()
+                        ],
+                        [
+                            (row.source_file, row.error)
+                            for row in session.scalars(select(AdImportRun)).all()
+                        ],
+                        [
+                            row.payload
+                            for row in session.scalars(select(Notification)).all()
+                        ],
+                    )
+                )
+                self.assertNotIn("79215559876", stored)
+                self.assertNotIn(name, stored)
+
     def test_utm_phone_match_manual_and_metrics(self):
         now = datetime(2026, 9, 8, 12, tzinfo=UTC)
         with (
@@ -126,6 +194,7 @@ class AdsServicesTest(unittest.TestCase):
                 performed_by="Артём",
                 created_at=now,
                 utm_source="yandex",
+                utm_campaign="search",
             )
             matched = Lead(
                 source="phone",
@@ -180,6 +249,134 @@ class AdsServicesTest(unittest.TestCase):
             row = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 30))[0]
             self.assertEqual(row.cpl, Decimal("1000.00"))
             self.assertEqual(row.romi, Decimal("300.00"))
+
+    def test_phone_match_checks_each_semicolon_separated_phone(self):
+        now = datetime(2026, 9, 8, 12, tzinfo=UTC)
+        with (
+            patch.dict(os.environ, {"PII_FERNET_KEY": self.key}),
+            Session(self.engine) as session,
+        ):
+            lead = Lead(
+                source="phone",
+                status="new",
+                amount=Decimal("0"),
+                performed_by="Артём",
+                created_at=now,
+                encrypted_pii=encrypt_pii({"phone": "+79210000001; +79215551234"}),
+            )
+            session.add(lead)
+            session.add(
+                AdCallLog(
+                    platform="2gis",
+                    call_date=now,
+                    phone_hash=phone_hmac("+79215551234"),
+                    source_file="file-deadbeef0000.csv",
+                )
+            )
+            session.flush()
+            self.assertEqual(attribute_lead(session, lead, now).platform, "2gis")
+
+    def test_metrics_separate_platform_and_campaign_and_use_period_income(self):
+        with Session(self.engine) as session:
+            session.add_all(
+                [
+                    AdSpend(
+                        platform="2gis",
+                        campaign="card",
+                        period_start=date(2026, 9, 1),
+                        period_end=date(2026, 9, 30),
+                        spend=Decimal("3000"),
+                        impressions=0,
+                        clicks=0,
+                        conversions=0,
+                    ),
+                    Lead(
+                        source="2gis",
+                        status="new",
+                        amount=Decimal("0"),
+                        performed_by="Артём",
+                        created_at=datetime(2026, 9, 5, tzinfo=UTC),
+                        attributed_platform="2gis",
+                        attribution_method="manual",
+                    ),
+                    Lead(
+                        source="2gis",
+                        status="new",
+                        amount=Decimal("0"),
+                        performed_by="Артём",
+                        created_at=datetime(2026, 9, 6, tzinfo=UTC),
+                        attributed_platform="2gis",
+                        attribution_method="utm",
+                        utm_campaign="card",
+                    ),
+                    Lead(
+                        source="2gis",
+                        status="new",
+                        amount=Decimal("0"),
+                        performed_by="Артём",
+                        created_at=datetime(2026, 8, 25, tzinfo=UTC),
+                        attributed_platform="2gis",
+                        attribution_method="utm",
+                        utm_campaign="card",
+                    ),
+                ]
+            )
+            session.flush()
+            leads = session.scalars(select(Lead).order_by(Lead.id)).all()
+            session.add_all(
+                [
+                    Transaction(
+                        source="manual",
+                        operation_date=date(2026, 8, 31),
+                        amount=Decimal("9000"),
+                        currency="RUB",
+                        kind="income",
+                        review_required=False,
+                        needs_review=False,
+                        lead_id=leads[2].id,
+                    ),
+                    Transaction(
+                        source="manual",
+                        operation_date=date(2026, 9, 10),
+                        amount=Decimal("6000"),
+                        currency="RUB",
+                        kind="income",
+                        review_required=False,
+                        needs_review=False,
+                        lead_id=leads[1].id,
+                    ),
+                ]
+            )
+            session.commit()
+            rows = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 30))
+            platform = next(row for row in rows if row.campaign == "Без кампании")
+            campaign = next(row for row in rows if row.campaign == "card")
+            self.assertEqual(platform.leads, 1)
+            self.assertEqual(platform.revenue, Decimal("0.00"))
+            self.assertEqual(campaign.leads, 1)
+            self.assertEqual(campaign.revenue, Decimal("6000.00"))
+
+    def test_metric_null_reasons_are_explicit(self):
+        with Session(self.engine) as session:
+            session.add(
+                AdSpend(
+                    platform="2gis",
+                    campaign="card",
+                    period_start=date(2026, 9, 1),
+                    period_end=date(2026, 9, 30),
+                    spend=Decimal("1000"),
+                    impressions=0,
+                    clicks=0,
+                    conversions=0,
+                )
+            )
+            session.commit()
+            rows = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 30))
+            campaign = next(row for row in rows if row.campaign == "card")
+            self.assertIsNone(campaign.cpl)
+            self.assertEqual(campaign.cpl_reason, "no_attributed_leads")
+            self.assertIsNone(campaign.romi)
+            self.assertEqual(campaign.romi_reason, "no_attributed_leads")
 
     def test_notification_payload_has_no_unapproved_pii(self):
         from app.ads.notifications import create_notification
@@ -236,7 +433,8 @@ class AdsServicesTest(unittest.TestCase):
             row = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 5))[0]
             self.assertEqual(row.spend, Decimal("500.00"))
             self.assertIsNone(row.cpl)
-            self.assertEqual(row.romi, Decimal("-100.00"))
+            self.assertIsNone(row.romi)
+            self.assertEqual(row.romi_reason, "no_attributed_leads")
             self.assertEqual(row.json()["cpl"], None)
 
 

@@ -93,9 +93,11 @@ def import_ads_file(
             select(Lead).where(Lead.attribution_method.is_(None))
         ):
             attribute_lead(session, lead, timestamp, pii_key=pii_key)
-        all_dates = [row.period_start for row in parsed.spend_rows] + [
-            row.call_date.date() for row in parsed.call_rows
-        ]
+        all_dates = [
+            value
+            for row in parsed.spend_rows
+            for value in (row.period_start, row.period_end)
+        ] + [row.call_date.date() for row in parsed.call_rows]
         period = (
             f"{min(all_dates).isoformat()}..{max(all_dates).isoformat()}"
             if all_dates

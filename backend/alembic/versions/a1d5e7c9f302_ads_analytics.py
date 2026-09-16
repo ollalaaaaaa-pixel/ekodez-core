@@ -127,12 +127,34 @@ def upgrade() -> None:
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "kind IN ('ads_import_ok', 'ads_import_error', "
-            "'ads_upload_reminder', 'ads_alert', 'draft_ready')",
+            "'ads_upload_reminder', 'ads_alert', 'draft_ready', "
+            "'ads_delivery_failed')",
             name="ck_notifications_kind",
         ),
     )
     op.create_index("ix_notifications_kind", "notifications", ["kind"])
     op.create_index("ix_notifications_created_at", "notifications", ["created_at"])
+
+    op.create_table(
+        "scheduler_job_runs",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("run_key", sa.String(120), nullable=False),
+        sa.Column("job_name", sa.String(80), nullable=False),
+        sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("status", sa.String(20), nullable=False),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("error_type", sa.String(100), nullable=True),
+        sa.UniqueConstraint("run_key", name="uq_scheduler_job_runs_run_key"),
+        sa.CheckConstraint(
+            "status IN ('running', 'ok', 'failed')",
+            name="ck_scheduler_job_runs_status",
+        ),
+    )
+    op.create_index(
+        "ix_scheduler_job_runs_job_name", "scheduler_job_runs", ["job_name"]
+    )
+    op.create_index("ix_scheduler_job_runs_status", "scheduler_job_runs", ["status"])
 
     after = {
         table: connection.scalar(sa.text(f"SELECT count(*) FROM {table}"))
@@ -148,6 +170,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("scheduler_job_runs")
     op.drop_table("notifications")
     op.drop_table("ad_import_runs")
     op.drop_table("ad_call_log")
