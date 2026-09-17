@@ -144,6 +144,33 @@ class AdsSchedulerTest(unittest.TestCase):
             self.assertEqual([row.status for row in attempts], ["stale_failed", "ok"])
             self.assertEqual(attempts[0].error_type, "LeaseExpired")
 
+    def test_stale_ads_attempt_recovers_after_iteration_cursor_passed_schedule(self):
+        config = AdsConfig(root=Path("C:/synthetic-ads"), platforms={})
+        now = datetime(2026, 9, 14, 10, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+        with Session(self.engine) as session:
+            session.add(
+                SchedulerJobRun(
+                    run_key="2026-09-14:ads_import",
+                    job_name="ads_import",
+                    scheduled_for=now.replace(hour=9, minute=15),
+                    status="running",
+                    started_at=now.replace(hour=9, minute=15),
+                )
+            )
+            session.commit()
+        with patch("app.reports.scheduler.load_ads_config", return_value=config):
+            self.assertEqual(
+                scheduler.run_due_ads_jobs(
+                    self.engine, now, now.replace(hour=9, minute=59)
+                ),
+                ("import",),
+            )
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(SchedulerJobRun).order_by(SchedulerJobRun.id)
+            ).all()
+            self.assertEqual([row.status for row in rows], ["stale_failed", "ok"])
+
     def test_daily_failure_does_not_block_ads_job_in_same_iteration(self):
         now = datetime(2026, 9, 14, 9, 15, tzinfo=ZoneInfo("Europe/Moscow"))
         with (

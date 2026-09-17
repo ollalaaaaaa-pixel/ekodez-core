@@ -123,7 +123,22 @@ def run_due_ads_jobs(
 ) -> tuple[str, ...]:
     last = last_iteration_time or now - timedelta(minutes=1)
     completed: list[str] = []
-    for scheduled in _due_times(last, now, minutes=(15, 20, 30)):
+    due = set(_due_times(last, now, minutes=(15, 20, 30)))
+    local = now.astimezone(MOSCOW_TZ)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    with Session(engine) as session:
+        unfinished = session.scalars(
+            select(SchedulerJobRun.scheduled_for).where(
+                SchedulerJobRun.job_name.in_(
+                    ("ads_import", "ads_reminders", "ads_weekly")
+                ),
+                SchedulerJobRun.status.in_(("running", "stale_failed")),
+                SchedulerJobRun.scheduled_for >= midnight.replace(tzinfo=None),
+                SchedulerJobRun.scheduled_for <= local.replace(tzinfo=None),
+            )
+        ).all()
+    due.update(value.replace(tzinfo=MOSCOW_TZ) for value in unfinished)
+    for scheduled in sorted(due):
         completed.extend(_run_ads_job(engine, scheduled, now))
     return tuple(completed)
 
