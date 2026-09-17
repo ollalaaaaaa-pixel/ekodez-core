@@ -80,6 +80,41 @@ class AdsParsersTest(unittest.TestCase):
             self.assertEqual(parsed.spend_rows[0].period_end, date(2026, 9, 8))
             self.assertEqual(parsed.spend_rows[0].clicks, 10)
 
+    def test_monthly_report_without_end_uses_last_day_of_september(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "monthly.csv"
+            path.write_text(
+                "Отчет за месяц сентябрь 2026\n"
+                "Кампания;Начало периода;Расход\n"
+                "Поиск;01.09.2026;3000\n",
+                encoding="utf-8",
+            )
+            row = parse_ads_file(path, "yandex_direct").spend_rows[0]
+            self.assertEqual(row.period_start, date(2026, 9, 1))
+            self.assertEqual(row.period_end, date(2026, 9, 30))
+
+    def test_weekly_marker_and_daily_date_keep_their_ranges(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            weekly = Path(temp_dir) / "weekly.csv"
+            weekly.write_text(
+                "Кампания;Начало периода;Гранулярность;Расход\n"
+                "Поиск;14.09.2026;неделя;700\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                parse_ads_file(weekly, "yandex_direct").spend_rows[0].period_end,
+                date(2026, 9, 20),
+            )
+            daily = Path(temp_dir) / "daily.csv"
+            daily.write_text(
+                "Кампания;Дата;Расход\nПоиск;14.09.2026;100\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                parse_ads_file(daily, "yandex_direct").spend_rows[0].period_end,
+                date(2026, 9, 14),
+            )
+
     def test_empty_and_unknown_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             empty = Path(temp_dir) / "empty.csv"

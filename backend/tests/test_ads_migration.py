@@ -75,6 +75,7 @@ class AdsMigrationTest(unittest.TestCase):
                         "ad_import_runs",
                         "notifications",
                         "scheduler_job_runs",
+                        "scheduler_state",
                     }
                     <= set(schema.get_table_names())
                 )

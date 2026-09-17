@@ -82,11 +82,14 @@ def _row(
     if not spend:
         cpl_reason = "no_spend"
         romi_reason = "no_spend"
-    elif not leads:
+    elif not leads and not revenue:
         cpl_reason = "no_attributed_leads"
         romi_reason = "no_attributed_leads"
     else:
-        cpl = (spend / leads).quantize(Decimal("0.01"))
+        if leads:
+            cpl = (spend / leads).quantize(Decimal("0.01"))
+        else:
+            cpl_reason = "no_attributed_leads"
         if not revenue:
             romi_reason = "no_income_transactions"
         else:

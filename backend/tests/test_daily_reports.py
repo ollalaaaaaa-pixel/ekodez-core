@@ -711,11 +711,43 @@ class DailySchedulerTest(unittest.TestCase):
         self.assertEqual(reports.call_count, 2)
         self.assertIn('"event": "gnom_scheduler_attempt_failed"', warning.getvalue())
         with Session(self.engine) as session:
-            run = session.scalar(
-                select(SchedulerJobRun).where(SchedulerJobRun.job_name == "gnom_weekly")
+            runs = session.scalars(
+                select(SchedulerJobRun)
+                .where(SchedulerJobRun.job_name == "gnom_weekly")
+                .order_by(SchedulerJobRun.id)
+            ).all()
+            self.assertEqual([run.status for run in runs], ["failed", "ok"])
+
+    def test_stale_outer_gnom_run_is_recovered_after_two_hours(self):
+        from app.reports import scheduler
+
+        now = datetime(2026, 9, 14, 11, 10, tzinfo=MOSCOW_TZ)
+        with Session(self.engine) as session:
+            session.add(
+                SchedulerJobRun(
+                    run_key="2026-09-14:gnom_weekly",
+                    job_name="gnom_weekly",
+                    scheduled_for=now.replace(hour=9, minute=10),
+                    status="running",
+                    started_at=now.replace(hour=9, minute=10),
+                )
             )
-            self.assertIsNotNone(run)
-            self.assertEqual(run.status, "ok")
+            session.commit()
+        with patch("app.gnom_scheduler.run_gnom_weekly", return_value=True) as gnom:
+            self.assertTrue(
+                scheduler.run_due_gnom_job(
+                    self.engine, now, now.replace(hour=11, minute=9)
+                )
+            )
+        gnom.assert_called_once()
+        with Session(self.engine) as session:
+            runs = session.scalars(
+                select(SchedulerJobRun)
+                .where(SchedulerJobRun.job_name == "gnom_weekly")
+                .order_by(SchedulerJobRun.id)
+            ).all()
+            self.assertEqual([run.status for run in runs], ["stale_failed", "ok"])
+            self.assertEqual(runs[0].error_type, "LeaseExpired")
 
     def test_configured_scheduler_starts_once_and_health_is_ok(self):
         from app.reports import scheduler

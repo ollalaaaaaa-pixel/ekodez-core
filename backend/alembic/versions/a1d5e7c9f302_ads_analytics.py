@@ -147,7 +147,7 @@ def upgrade() -> None:
         sa.Column("error_type", sa.String(100), nullable=True),
         sa.UniqueConstraint("run_key", name="uq_scheduler_job_runs_run_key"),
         sa.CheckConstraint(
-            "status IN ('running', 'ok', 'failed')",
+            "status IN ('running', 'ok', 'failed', 'stale_failed')",
             name="ck_scheduler_job_runs_status",
         ),
     )
@@ -155,6 +155,12 @@ def upgrade() -> None:
         "ix_scheduler_job_runs_job_name", "scheduler_job_runs", ["job_name"]
     )
     op.create_index("ix_scheduler_job_runs_status", "scheduler_job_runs", ["status"])
+
+    op.create_table(
+        "scheduler_state",
+        sa.Column("name", sa.String(80), primary_key=True),
+        sa.Column("last_iteration_time", sa.DateTime(timezone=True), nullable=False),
+    )
 
     after = {
         table: connection.scalar(sa.text(f"SELECT count(*) FROM {table}"))
@@ -170,6 +176,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("scheduler_state")
     op.drop_table("scheduler_job_runs")
     op.drop_table("notifications")
     op.drop_table("ad_import_runs")

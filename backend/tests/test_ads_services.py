@@ -378,6 +378,52 @@ class AdsServicesTest(unittest.TestCase):
             self.assertIsNone(campaign.romi)
             self.assertEqual(campaign.romi_reason, "no_attributed_leads")
 
+    def test_august_lead_paid_in_september_has_100_percent_romi(self):
+        with Session(self.engine) as session:
+            lead = Lead(
+                source="2gis",
+                status="new",
+                amount=Decimal("0"),
+                performed_by="Артём",
+                created_at=datetime(2026, 8, 25, tzinfo=UTC),
+                attributed_platform="2gis",
+                attribution_method="utm",
+                utm_campaign="card",
+            )
+            session.add(lead)
+            session.flush()
+            session.add_all(
+                [
+                    AdSpend(
+                        platform="2gis",
+                        campaign="card",
+                        period_start=date(2026, 9, 1),
+                        period_end=date(2026, 9, 30),
+                        spend=Decimal("3000"),
+                        impressions=0,
+                        clicks=0,
+                        conversions=0,
+                    ),
+                    Transaction(
+                        source="manual",
+                        operation_date=date(2026, 9, 10),
+                        amount=Decimal("6000"),
+                        currency="RUB",
+                        kind="income",
+                        review_required=False,
+                        needs_review=False,
+                        lead_id=lead.id,
+                    ),
+                ]
+            )
+            session.commit()
+            row = ads_metrics(session, date(2026, 9, 1), date(2026, 9, 30))[0]
+            self.assertEqual(row.leads, 0)
+            self.assertEqual(row.revenue, Decimal("6000.00"))
+            self.assertEqual(row.romi, Decimal("100.00"))
+            self.assertIsNone(row.romi_reason)
+            self.assertEqual(row.cpl_reason, "no_attributed_leads")
+
     def test_notification_payload_has_no_unapproved_pii(self):
         from app.ads.notifications import create_notification
 

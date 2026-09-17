@@ -422,7 +422,7 @@ class SchedulerJobRun(Base):
     __table_args__ = (
         UniqueConstraint("run_key", name="uq_scheduler_job_runs_run_key"),
         CheckConstraint(
-            "status IN ('running', 'ok', 'failed')",
+            "status IN ('running', 'ok', 'failed', 'stale_failed')",
             name="ck_scheduler_job_runs_status",
         ),
     )
@@ -441,6 +441,15 @@ class SchedulerJobRun(Base):
         DateTime(timezone=True), nullable=True
     )
     error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class SchedulerState(Base):
+    __tablename__ = "scheduler_state"
+
+    name: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_iteration_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class TelegramMasterDraft(Base):

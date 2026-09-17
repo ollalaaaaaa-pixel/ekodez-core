@@ -23,6 +23,7 @@ class PlatformConfig:
 class AdsConfig:
     root: Path
     platforms: dict[str, PlatformConfig]
+    scheduler_stale_timeout_minutes: int = 30
 
 
 def _optional_decimal(value: object) -> Decimal | None:
@@ -46,6 +47,12 @@ def load_ads_config(path: Path = DEFAULT_ADS_CONFIG_PATH) -> AdsConfig:
     if not isinstance(raw, dict) or not isinstance(raw.get("platforms"), dict):
         raise AdsConfigError("platform configuration is required")
     root = Path(str(raw.get("root") or path.parent)).resolve()
+    try:
+        timeout = int(raw.get("scheduler_stale_timeout_minutes", 30))
+    except (TypeError, ValueError) as exc:
+        raise AdsConfigError("invalid scheduler stale timeout") from exc
+    if timeout < 1:
+        raise AdsConfigError("scheduler stale timeout must be positive")
     platforms: dict[str, PlatformConfig] = {}
     for name, item in raw["platforms"].items():
         if name not in ALLOWED_PLATFORMS or not isinstance(item, dict):
@@ -64,4 +71,6 @@ def load_ads_config(path: Path = DEFAULT_ADS_CONFIG_PATH) -> AdsConfig:
                 item.get("zero_lead_spend_threshold")
             ),
         )
-    return AdsConfig(root=root, platforms=platforms)
+    return AdsConfig(
+        root=root, platforms=platforms, scheduler_stale_timeout_minutes=timeout
+    )

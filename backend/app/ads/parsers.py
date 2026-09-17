@@ -2,7 +2,7 @@ import csv
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from pathlib import Path
@@ -44,6 +44,7 @@ ALIASES = {
     "campaign": {"кампания", "название кампании", "campaign"},
     "start": {"начало периода", "дата начала", "period start"},
     "end": {"конец периода", "дата окончания", "period end"},
+    "granularity": {"гранулярность", "периодичность", "granularity"},
     "date": {"дата", "день", "date"},
     "spend": {"расход", "расход руб", "затраты", "spend", "cost"},
     "impressions": {"показы", "impressions"},
@@ -203,6 +204,27 @@ def _nonempty_rows(rows: Iterable[list[object]]) -> list[list[object]]:
     return [row for row in rows if any(str(value or "").strip() for value in row)]
 
 
+def _granularity(marker: str, *, daily_date_column: bool = False) -> str:
+    value = _header(marker)
+    if re.search(r"месяц|месячн|monthly|month", value):
+        return "month"
+    if re.search(r"недел|weekly|week", value):
+        return "week"
+    if re.search(r"день|дневн|daily|day", value):
+        return "day"
+    return "day" if daily_date_column else "month"
+
+
+def _inferred_period_end(start: date, granularity: str) -> date:
+    if granularity == "day":
+        return start
+    if granularity == "week":
+        return start + timedelta(days=6)
+    next_year = start.year + (start.month == 12)
+    next_month = start.month % 12 + 1
+    return date(next_year, next_month, 1) - timedelta(days=1)
+
+
 def parse_ads_file(
     path: Path, platform: str, pii_key: str | None = None
 ) -> ParsedAdsFile:
@@ -230,12 +252,32 @@ def parse_ads_file(
     if not spend_shape and not call_shape:
         raise AdsParseError("advertising columns were not recognized")
 
+    report_markers = " ".join(
+        str(value) for row in rows[:header_index] for value in row if value is not None
+    )
+    default_granularity = _granularity(
+        report_markers, daily_date_column="date" in fields and "start" not in fields
+    )
+
     spend_rows: list[ParsedSpendRow] = []
     call_rows: list[ParsedCallRow] = []
     for row in rows[header_index + 1 :]:
         if spend_shape:
             start = _date(_value(row, fields, "start" if "start" in fields else "date"))
-            end = _date(_value(row, fields, "end")) if "end" in fields else start
+            granularity = (
+                _granularity(str(_value(row, fields, "granularity")))
+                if "granularity" in fields
+                and str(_value(row, fields, "granularity") or "").strip()
+                else default_granularity
+            )
+            explicit_end = _value(row, fields, "end") if "end" in fields else None
+            end = (
+                _date(explicit_end)
+                if explicit_end not in (None, "")
+                else _inferred_period_end(start, granularity)
+            )
+            if end < start:
+                raise AdsParseError("advertising period end precedes start")
             spend_rows.append(
                 ParsedSpendRow(
                     campaign=(
