@@ -93,6 +93,55 @@ class AdsSchedulerTest(unittest.TestCase):
         now = datetime(2026, 9, 14, 8, 1, tzinfo=ZoneInfo("Europe/Moscow"))
         self.assertLessEqual(scheduler.poll_delay_seconds(now), 60.0)
 
+    def test_long_job_catches_up_missed_0915_import_at_0916(self):
+        config = AdsConfig(root=Path("C:/synthetic-ads"), platforms={})
+        monday = datetime(2026, 9, 14, 9, 10, tzinfo=ZoneInfo("Europe/Moscow"))
+        with (
+            patch("app.reports.scheduler.run_due_auto", return_value=False),
+            patch("app.reports.scheduler.load_ads_config", return_value=config),
+        ):
+            scheduler.run_scheduler_iteration(self.engine, monday)
+            scheduler.run_scheduler_iteration(self.engine, monday.replace(minute=16))
+        with Session(self.engine) as session:
+            runs = session.scalars(select(SchedulerJobRun)).all()
+            self.assertEqual(
+                [(row.job_name, row.status) for row in runs], [("ads_import", "ok")]
+            )
+            self.assertEqual(
+                session.get(
+                    scheduler.SchedulerState, "core"
+                ).last_iteration_time.minute,
+                16,
+            )
+
+    def test_stale_running_attempt_is_recorded_and_retried(self):
+        config = AdsConfig(root=Path("C:/synthetic-ads"), platforms={})
+        monday = datetime(2026, 9, 14, 9, 16, tzinfo=ZoneInfo("Europe/Moscow"))
+        with Session(self.engine) as session:
+            session.add(
+                SchedulerJobRun(
+                    run_key="2026-09-14:ads_import",
+                    job_name="ads_import",
+                    scheduled_for=monday.replace(minute=15),
+                    status="running",
+                    started_at=monday.replace(hour=7, minute=15),
+                )
+            )
+            session.commit()
+        with patch("app.reports.scheduler.load_ads_config", return_value=config):
+            self.assertEqual(
+                scheduler.run_due_ads_jobs(
+                    self.engine, monday, monday.replace(minute=10)
+                ),
+                ("import",),
+            )
+        with Session(self.engine) as session:
+            attempts = session.scalars(
+                select(SchedulerJobRun).order_by(SchedulerJobRun.id)
+            ).all()
+            self.assertEqual([row.status for row in attempts], ["stale_failed", "ok"])
+            self.assertEqual(attempts[0].error_type, "LeaseExpired")
+
     def test_daily_failure_does_not_block_ads_job_in_same_iteration(self):
         now = datetime(2026, 9, 14, 9, 15, tzinfo=ZoneInfo("Europe/Moscow"))
         with (
@@ -104,7 +153,12 @@ class AdsSchedulerTest(unittest.TestCase):
             ) as ads,
         ):
             scheduler.run_scheduler_iteration(self.engine, now)
-        ads.assert_called_once_with(self.engine, now)
+        ads.assert_called_once_with(
+            self.engine,
+            now,
+            now.replace(hour=0, minute=0, second=0, microsecond=0)
+            - scheduler.timedelta(microseconds=1),
+        )
 
 
 if __name__ == "__main__":

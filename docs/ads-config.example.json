@@ -1,5 +1,6 @@
 {
   "root": "C:\\D\\Экодез\\ads",
+  "scheduler_stale_timeout_minutes": 30,
   "platforms": {
     "yandex_direct": {
       "mode": "manual",

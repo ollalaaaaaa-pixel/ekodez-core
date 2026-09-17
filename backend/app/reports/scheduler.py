@@ -12,10 +12,10 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from app.ads.agent import create_upload_reminders, run_ads_weekly
-from app.ads.config import load_ads_config
+from app.ads.config import AdsConfigError, load_ads_config
 from app.ads.importer import import_ads_file
 from app.auto_contract_packages import DocumentGenerator
-from app.models import SchedulerJobRun
+from app.models import SchedulerJobRun, SchedulerState
 from app.reports.daily import (
     reports_configured,
     send_daily_report,
@@ -36,30 +36,46 @@ def _claim_job(
     scheduled_for: datetime,
     *,
     retry_failed: bool = False,
-) -> bool:
+    started_at: datetime | None = None,
+) -> str | None:
+    current = (started_at or scheduled_for).astimezone(MOSCOW_TZ).replace(tzinfo=None)
     with Session(engine) as session:
         existing = session.scalar(
-            select(SchedulerJobRun).where(SchedulerJobRun.run_key == run_key)
+            select(SchedulerJobRun)
+            .where(
+                SchedulerJobRun.job_name == job_name,
+                (SchedulerJobRun.run_key == run_key)
+                | SchedulerJobRun.run_key.like(f"{run_key}:retry:%"),
+            )
+            .order_by(SchedulerJobRun.id.desc())
         )
         if existing is not None:
-            if not retry_failed or existing.status != "failed":
-                return False
-            existing.status = "running"
-            existing.started_at = scheduled_for
-            existing.finished_at = None
-            existing.error_type = None
-        else:
-            session.add(
-                SchedulerJobRun(
-                    run_key=run_key,
-                    job_name=job_name,
-                    scheduled_for=scheduled_for,
-                    status="running",
-                    started_at=scheduled_for,
-                )
+            if existing.status == "running":
+                try:
+                    timeout = load_ads_config().scheduler_stale_timeout_minutes
+                except AdsConfigError:
+                    timeout = 30
+                if existing.started_at >= current - timedelta(minutes=timeout):
+                    return None
+                existing.status = "stale_failed"
+                existing.finished_at = current
+                existing.error_type = "LeaseExpired"
+            elif existing.status != "stale_failed" and not (
+                retry_failed and existing.status == "failed"
+            ):
+                return None
+            run_key = f"{run_key}:retry:{existing.id + 1}"
+        session.add(
+            SchedulerJobRun(
+                run_key=run_key,
+                job_name=job_name,
+                scheduled_for=scheduled_for,
+                status="running",
+                started_at=current,
             )
+        )
         session.commit()
-    return True
+    return run_key
 
 
 def _finish_job(
@@ -75,20 +91,52 @@ def _finish_job(
         )
         if row is None:
             return
+        if row.status != "running":
+            return
         row.status = status
-        row.finished_at = finished_at
+        row.finished_at = finished_at.astimezone(MOSCOW_TZ).replace(tzinfo=None)
         row.error_type = type(error).__name__ if error is not None else None
         session.commit()
 
 
-def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
+def _due_times(
+    last_iteration_time: datetime, now: datetime, *, minutes: tuple[int, ...]
+) -> list[datetime]:
+    last = last_iteration_time.astimezone(MOSCOW_TZ)
     local = now.astimezone(MOSCOW_TZ)
-    if local.weekday() != 0 or local.hour != 9 or local.minute not in {15, 20, 30}:
-        return ()
-    job = {15: "import", 20: "reminders", 30: "weekly"}[local.minute]
+    due: list[datetime] = []
+    day = last.date()
+    while day <= local.date():
+        if day.weekday() == 0:
+            for minute in minutes:
+                scheduled = datetime.combine(
+                    day, datetime_time(9, minute), tzinfo=MOSCOW_TZ
+                )
+                if last < scheduled <= local:
+                    due.append(scheduled)
+        day += timedelta(days=1)
+    return due
+
+
+def run_due_ads_jobs(
+    engine: Engine, now: datetime, last_iteration_time: datetime | None = None
+) -> tuple[str, ...]:
+    last = last_iteration_time or now - timedelta(minutes=1)
+    completed: list[str] = []
+    for scheduled in _due_times(last, now, minutes=(15, 20, 30)):
+        completed.extend(_run_ads_job(engine, scheduled, now))
+    return tuple(completed)
+
+
+def _run_ads_job(
+    engine: Engine, scheduled_for: datetime, now: datetime
+) -> tuple[str, ...]:
+    local = now.astimezone(MOSCOW_TZ)
+    job = {15: "import", 20: "reminders", 30: "weekly"}[scheduled_for.minute]
     job_name = f"ads_{job}"
-    run_key = f"{local.date().isoformat()}:{job_name}"
-    if not _claim_job(engine, run_key, job_name, local):
+    base_key = f"{scheduled_for.date().isoformat()}:{job_name}"
+    run_key = _claim_job(engine, base_key, job_name, scheduled_for, started_at=local)
+    if run_key is None:
         return ()
     try:
         config = load_ads_config()
@@ -149,7 +197,7 @@ def run_due_ads_jobs(engine: Engine, now: datetime) -> tuple[str, ...]:
                     and send_message(token, int(owner), message)
                 )
 
-            result = run_ads_weekly(engine, local, owner_sender)
+            result = run_ads_weekly(engine, scheduled_for, owner_sender)
             if not result.get("delivered"):
                 raise RuntimeError("weekly delivery failed")
     except Exception as error:
@@ -191,7 +239,8 @@ def run_due_auto(
         if successful_auto_exists(session, now.astimezone(MOSCOW_TZ).date()):
             return False
     run_key = f"{local.date().isoformat()}:daily_auto"
-    if not _claim_job(engine, run_key, "daily_auto", local, retry_failed=True):
+    claimed_key = _claim_job(engine, run_key, "daily_auto", local, retry_failed=True)
+    if claimed_key is None:
         return False
     try:
         if auto_package_generator is None:
@@ -204,9 +253,9 @@ def run_due_auto(
                 auto_package_generator=auto_package_generator,
             )
     except Exception as error:
-        _finish_job(engine, run_key, "failed", local, error)
+        _finish_job(engine, claimed_key, "failed", local, error)
         raise
-    _finish_job(engine, run_key, "ok", local)
+    _finish_job(engine, claimed_key, "ok", local)
     return True
 
 
@@ -226,19 +275,42 @@ def _scheduler_loop(
         time.sleep(poll_delay_seconds(now))
 
 
+def _last_iteration(engine: Engine, now: datetime) -> datetime:
+    with Session(engine) as session:
+        row = session.get(SchedulerState, "core")
+    if row is None:
+        return now.astimezone(MOSCOW_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(microseconds=1)
+    return row.last_iteration_time.replace(tzinfo=MOSCOW_TZ)
+
+
+def _record_iteration(engine: Engine, now: datetime) -> None:
+    local = now.astimezone(MOSCOW_TZ).replace(tzinfo=None)
+    with Session(engine) as session:
+        row = session.get(SchedulerState, "core")
+        if row is None:
+            session.add(SchedulerState(name="core", last_iteration_time=local))
+        elif row.last_iteration_time < local:
+            row.last_iteration_time = local
+        session.commit()
+
+
 def run_scheduler_iteration(
     engine: Engine,
     now: datetime,
     auto_package_generator: DocumentGenerator | None = None,
 ) -> None:
+    last_iteration_time = _last_iteration(engine, now)
     try:
         run_due_auto(engine, now, auto_package_generator)
     except Exception as error:
         _warning("daily_report_job_failed", error)
     try:
-        run_due_ads_jobs(engine, now)
+        run_due_ads_jobs(engine, now, last_iteration_time)
     except Exception as error:
         _warning("ads_scheduler_job_failed", error)
+    _record_iteration(engine, now)
 
 
 def poll_delay_seconds(now: datetime) -> float:
