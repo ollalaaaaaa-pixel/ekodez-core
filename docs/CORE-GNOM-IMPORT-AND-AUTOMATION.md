@@ -48,3 +48,4 @@ restart и публикация ожидают «применяй».
 
 sqlite-safe-migration, owner-approval-gate, pii-and-reveal-guard,
 tg-bot-default-deny, using-git-worktrees.
+# HTTP owner-only: без сессии — 401; сессия с ролью не owner — 403.

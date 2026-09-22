@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.gnom_parser import GnomError
 from app.gnom_service import analytics, import_file
-from app.models import GnomImportRun, GnomSettings, GnomWeeklyRun
+from app.models import GnomImportRun, GnomSettings, GnomWeeklyAttempt, GnomWeeklyRun
 
 IMPORT_ROOT = Path(r"C:\D\Экодез\import\gnom")
 RUN_LEASE = timedelta(minutes=90)
@@ -32,14 +32,20 @@ def run_gnom_weekly(
     engine: Engine,
     now: datetime,
     sender: Callable[[str], bool] = owner_alert,
-    root: Path = IMPORT_ROOT,
+    root: Path | None = None,
+    *,
+    scheduled_for: datetime | None = None,
 ) -> bool:
     local = now.astimezone(ZoneInfo("Europe/Moscow"))
-    if local.weekday() != 0 or (local.hour, local.minute) < (9, 10):
+    slot = (scheduled_for or now).astimezone(ZoneInfo("Europe/Moscow"))
+    if slot > local or slot.weekday() != 0 or (slot.hour, slot.minute) < (9, 10):
         return False
-    week = local.date()
+    root = root or IMPORT_ROOT
+    week = slot.date()
     started_at = local.replace(tzinfo=None)
     with Session(engine) as session:
+        if engine.dialect.name == "sqlite":
+            session.execute(text("BEGIN IMMEDIATE"))
         settings = session.get(GnomSettings, 1)
         if not settings or not settings.weekly_enabled:
             return False
@@ -49,9 +55,27 @@ def run_gnom_weekly(
         if (
             existing
             and existing.status == "running"
-            and existing.started_at > started_at - RUN_LEASE
+            and existing.started_at >= started_at - RUN_LEASE
         ):
             return False
+        if existing and existing.status == "running":
+            existing.status = "stale_failed"
+            previous = session.scalar(
+                select(GnomWeeklyAttempt)
+                .where(
+                    GnomWeeklyAttempt.week == week,
+                    GnomWeeklyAttempt.status == "running",
+                )
+                .order_by(GnomWeeklyAttempt.id.desc())
+            )
+            if previous is None:
+                previous = GnomWeeklyAttempt(
+                    week=week, status="stale_failed", started_at=existing.started_at
+                )
+                session.add(previous)
+            previous.status = "stale_failed"
+            previous.finished_at = started_at
+            previous.error_type = "LeaseExpired"
         if existing:
             existing.status = "running"
             existing.started_at = started_at
@@ -59,7 +83,12 @@ def run_gnom_weekly(
             session.add(
                 GnomWeeklyRun(week=week, status="running", started_at=started_at)
             )
+        session.flush()
+        attempt = GnomWeeklyAttempt(week=week, status="running", started_at=started_at)
+        session.add(attempt)
         try:
+            session.flush()
+            attempt_id = attempt.id
             session.commit()
         except IntegrityError:
             session.rollback()
@@ -108,5 +137,13 @@ def run_gnom_weekly(
         with Session(engine) as session, session.begin():
             run = session.get(GnomWeeklyRun, week)
             assert run is not None
-            run.status = "sent" if delivered else "failed"
+            finished_attempt = session.get(GnomWeeklyAttempt, attempt_id)
+            assert finished_attempt is not None
+            if finished_attempt.status == "running":
+                finished_attempt.status = "sent" if delivered else "failed"
+                finished_attempt.finished_at = datetime.now(
+                    ZoneInfo("Europe/Moscow")
+                ).replace(tzinfo=None)
+                if run.started_at == started_at:
+                    run.status = finished_attempt.status
     return delivered

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from openpyxl import Workbook
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 
 from app.ads.attribution import attribute_lead, set_manual_attribution
@@ -162,21 +162,13 @@ class AdsServicesTest(unittest.TestCase):
                 with self.assertRaises(AdsParseError):
                     import_ads_file(session, "2gis", broken, pii_key=self.key)
                 session.commit()
-                stored = repr(
-                    (
-                        [
-                            (row.phone_hash, row.source_file)
-                            for row in session.scalars(select(AdCallLog)).all()
-                        ],
-                        [
-                            (row.source_file, row.error)
-                            for row in session.scalars(select(AdImportRun)).all()
-                        ],
-                        [
-                            row.payload
-                            for row in session.scalars(select(Notification)).all()
-                        ],
-                    )
+                stored = str(
+                    {
+                        table.name: session.execute(
+                            text(f'SELECT * FROM "{table.name}"')
+                        ).all()
+                        for table in Base.metadata.sorted_tables
+                    }
                 )
                 self.assertNotIn("79215559876", stored)
                 self.assertNotIn(name, stored)

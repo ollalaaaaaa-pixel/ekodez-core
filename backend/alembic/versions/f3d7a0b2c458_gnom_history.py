@@ -149,6 +149,18 @@ def _upgrade() -> None:
         sa.Column("status", sa.String(30), nullable=False),
         sa.Column("started_at", sa.DateTime(), nullable=False),
     )
+    op.create_table(
+        "gnom_weekly_attempts",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column(
+            "week", sa.Date(), sa.ForeignKey("gnom_weekly_runs.week"), nullable=False
+        ),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=False),
+        sa.Column("finished_at", sa.DateTime()),
+        sa.Column("error_type", sa.String(80)),
+    )
+    op.create_index("ix_gnom_weekly_attempts_week", "gnom_weekly_attempts", ["week"])
     for name, count in before.items():
         if connection.scalar(sa.text(f"SELECT count(*) FROM {name}")) != count:
             raise RuntimeError("Gnom migration row count mismatch")

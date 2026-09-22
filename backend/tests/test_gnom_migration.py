@@ -60,6 +60,12 @@ class GnomMigrationTest(unittest.TestCase):
                     )
                     self.assertEqual(
                         connection.scalar(
+                            text("SELECT count(*) FROM gnom_weekly_attempts")
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        connection.scalar(
                             text("SELECT version_num FROM alembic_version")
                         ),
                         "f3d7a0b2c458",

@@ -97,6 +97,16 @@ class GnomWeeklyRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class GnomWeeklyAttempt(Base):
+    __tablename__ = "gnom_weekly_attempts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    week: Mapped[date] = mapped_column(ForeignKey("gnom_weekly_runs.week"), index=True)
+    status: Mapped[str] = mapped_column(String(30))
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    error_type: Mapped[str | None] = mapped_column(String(80))
+
+
 class ConsumedChallenge(Base):
     __tablename__ = "consumed_challenges"
 

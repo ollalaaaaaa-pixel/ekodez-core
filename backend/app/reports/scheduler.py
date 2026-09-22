@@ -37,6 +37,7 @@ def _claim_job(
     *,
     retry_failed: bool = False,
     started_at: datetime | None = None,
+    blocked_start: bool = False,
 ) -> str | None:
     current = (started_at or scheduled_for).astimezone(MOSCOW_TZ).replace(tzinfo=None)
     with Session(engine) as session:
@@ -65,6 +66,9 @@ def _claim_job(
             ):
                 return None
             run_key = f"{run_key}:retry:{existing.id + 1}"
+        if blocked_start:
+            session.commit()
+            return None
         session.add(
             SchedulerJobRun(
                 run_key=run_key,
@@ -340,26 +344,46 @@ def poll_delay_seconds(now: datetime) -> float:
 def run_due_gnom_job(
     engine: Engine, now: datetime, last_iteration_time: datetime | None = None
 ) -> bool:
-    from app.gnom_scheduler import run_gnom_weekly
-    from app.models import GnomWeeklyRun
+    from app.models import GnomSettings
 
     local = now.astimezone(MOSCOW_TZ)
-    if local.weekday() != 0 or (local.hour, local.minute) < (9, 10):
-        return False
-    scheduled = local.replace(hour=9, minute=10, second=0, microsecond=0)
     last = last_iteration_time or local - timedelta(minutes=1)
-    run_key = f"{local.date().isoformat()}:gnom_weekly"
     with Session(engine) as session:
-        pending = session.scalar(
-            select(SchedulerJobRun.id).where(
+        settings = session.get(GnomSettings, 1)
+        if settings is None or not settings.weekly_enabled:
+            return False
+        pending = session.scalars(
+            select(SchedulerJobRun.scheduled_for).where(
                 SchedulerJobRun.job_name == "gnom_weekly",
-                (SchedulerJobRun.run_key == run_key)
-                | SchedulerJobRun.run_key.like(f"{run_key}:retry:%"),
+                SchedulerJobRun.scheduled_for <= local.replace(tzinfo=None),
                 SchedulerJobRun.status.in_(("running", "failed", "stale_failed")),
             )
+        ).all()
+    due = set(_due_times(last, local, minutes=(10,)))
+    due.update(value.replace(tzinfo=MOSCOW_TZ) for value in pending)
+    delivered = False
+    for scheduled in sorted(due):
+        if scheduled.weekday() != 0 or (scheduled.hour, scheduled.minute) != (9, 10):
+            continue
+        try:
+            delivered = _run_gnom_slot(engine, scheduled, local) or delivered
+        except Exception as error:
+            _warning("gnom_scheduler_attempt_failed", error)
+    return delivered
+
+
+def _run_gnom_slot(engine: Engine, scheduled: datetime, local: datetime) -> bool:
+    from app.gnom_scheduler import RUN_LEASE, run_gnom_weekly
+    from app.models import GnomWeeklyRun
+
+    with Session(engine) as session:
+        weekly = session.get(GnomWeeklyRun, scheduled.date())
+        blocked = bool(
+            weekly is not None
+            and weekly.status == "running"
+            and weekly.started_at >= local.replace(tzinfo=None) - RUN_LEASE
         )
-    if not (last < scheduled <= local or pending is not None):
-        return False
+    run_key = f"{scheduled.date().isoformat()}:gnom_weekly"
     claimed_key = _claim_job(
         engine,
         run_key,
@@ -367,16 +391,17 @@ def run_due_gnom_job(
         scheduled,
         retry_failed=True,
         started_at=local,
+        blocked_start=blocked,
     )
     if claimed_key is None:
         return False
     try:
-        delivered = run_gnom_weekly(engine, local)
+        delivered = run_gnom_weekly(engine, local, scheduled_for=scheduled)
         with Session(engine) as session:
-            weekly = session.get(GnomWeeklyRun, local.date())
-            failed = weekly is not None and weekly.status == "failed"
-        if failed:
-            error = RuntimeError("gnom weekly delivery failed")
+            weekly = session.get(GnomWeeklyRun, scheduled.date())
+            completed = weekly is not None and weekly.status == "sent"
+        if not completed:
+            error = RuntimeError("gnom weekly handler did not complete")
             _finish_job(engine, claimed_key, "failed", local, error)
             return False
     except Exception as error:

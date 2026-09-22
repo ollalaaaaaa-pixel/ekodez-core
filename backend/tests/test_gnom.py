@@ -309,7 +309,7 @@ class GnomIntegrationTest(unittest.TestCase):
         with TestClient(main.app, client=("127.0.0.1", 51001)) as anonymous:
             for method, url, kwargs in cases:
                 self.assertEqual(
-                    anonymous.request(method, url, **kwargs).status_code, 403
+                    anonymous.request(method, url, **kwargs).status_code, 401
                 )
         with TestClient(main.app, client=("127.0.0.1", 51002)) as master:
             self.assertEqual(

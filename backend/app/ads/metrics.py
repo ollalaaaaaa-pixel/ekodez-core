@@ -129,9 +129,20 @@ def ads_metrics(session: Session, start: date, end: date) -> list[MetricRow]:
             func.date(Lead.created_at) <= end,
         )
     ).all()
+    paid = session.execute(
+        select(Lead.attributed_platform, Lead.utm_campaign)
+        .join(Transaction, Transaction.lead_id == Lead.id)
+        .where(
+            Lead.attributed_platform.is_not(None),
+            Transaction.kind == "income",
+            Transaction.operation_date >= start,
+            Transaction.operation_date <= end,
+        )
+        .distinct()
+    ).all()
     campaign_keys = set(grouped)
     platform_rows: set[str] = set()
-    for platform, campaign in attributed:
+    for platform, campaign in [*attributed, *paid]:
         if platform is None:
             continue
         if campaign:

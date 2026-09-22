@@ -261,6 +261,18 @@ def parse_ads_file(
 
     spend_rows: list[ParsedSpendRow] = []
     call_rows: list[ParsedCallRow] = []
+    latest_dates: dict[date, date] = {}
+    if spend_shape:
+        for row in rows[header_index + 1 :]:
+            period_start = _date(
+                _value(row, fields, "start" if "start" in fields else "date")
+            )
+            row_date = (
+                _date(_value(row, fields, "date")) if "date" in fields else period_start
+            )
+            latest_dates[period_start] = max(
+                latest_dates.get(period_start, row_date), row_date
+            )
     for row in rows[header_index + 1 :]:
         if spend_shape:
             start = _date(_value(row, fields, "start" if "start" in fields else "date"))
@@ -271,13 +283,16 @@ def parse_ads_file(
                 else default_granularity
             )
             explicit_end = _value(row, fields, "end") if "end" in fields else None
-            end = (
-                _date(explicit_end)
-                if explicit_end not in (None, "")
-                else _inferred_period_end(start, granularity)
+            supplied_end = (
+                _date(explicit_end) if explicit_end not in (None, "") else start
             )
-            if end < start:
+            if supplied_end < start:
                 raise AdsParseError("advertising period end precedes start")
+            end = max(
+                supplied_end,
+                latest_dates[start],
+                _inferred_period_end(start, granularity),
+            )
             spend_rows.append(
                 ParsedSpendRow(
                     campaign=(

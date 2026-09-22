@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -23,6 +24,8 @@ from alembic import command
 from app import main
 from app.models import (
     Base,
+    GnomSettings,
+    GnomWeeklyRun,
     Inventory,
     Lead,
     Object,
@@ -698,7 +701,7 @@ class DailySchedulerTest(unittest.TestCase):
         warning = io.StringIO()
         with (
             patch(
-                "app.gnom_scheduler.run_gnom_weekly",
+                "app.reports.scheduler.run_due_gnom_job",
                 side_effect=[RuntimeError("synthetic"), False],
             ) as gnom,
             patch.object(scheduler, "run_due_auto", return_value=False) as reports,
@@ -710,19 +713,20 @@ class DailySchedulerTest(unittest.TestCase):
         self.assertEqual(gnom.call_count, 2)
         self.assertEqual(reports.call_count, 2)
         self.assertIn('"event": "gnom_scheduler_attempt_failed"', warning.getvalue())
-        with Session(self.engine) as session:
-            runs = session.scalars(
-                select(SchedulerJobRun)
-                .where(SchedulerJobRun.job_name == "gnom_weekly")
-                .order_by(SchedulerJobRun.id)
-            ).all()
-            self.assertEqual([run.status for run in runs], ["failed", "ok"])
 
     def test_stale_outer_gnom_run_is_recovered_after_two_hours(self):
         from app.reports import scheduler
 
         now = datetime(2026, 9, 14, 11, 10, tzinfo=MOSCOW_TZ)
         with Session(self.engine) as session:
+            session.add(GnomSettings(id=1, weekly_enabled=True))
+            session.add(
+                GnomWeeklyRun(
+                    week=now.date(),
+                    status="running",
+                    started_at=now.replace(hour=9, minute=10, tzinfo=None),
+                )
+            )
             session.add(
                 SchedulerJobRun(
                     run_key="2026-09-14:gnom_weekly",
@@ -733,13 +737,20 @@ class DailySchedulerTest(unittest.TestCase):
                 )
             )
             session.commit()
-        with patch("app.gnom_scheduler.run_gnom_weekly", return_value=True) as gnom:
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch("app.gnom_scheduler.IMPORT_ROOT", Path(folder)),
+            patch.dict(
+                os.environ, {"TELEGRAM_BOT_TOKEN": "synthetic", "OWNER_TG_ID": "1"}
+            ),
+            patch("app.tg_poller.send_message", return_value=True) as send,
+        ):
             self.assertTrue(
                 scheduler.run_due_gnom_job(
                     self.engine, now, now.replace(hour=11, minute=9)
                 )
             )
-        gnom.assert_called_once()
+        send.assert_called_once()
         with Session(self.engine) as session:
             runs = session.scalars(
                 select(SchedulerJobRun)

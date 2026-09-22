@@ -27,7 +27,6 @@ from app.models import (
 )
 from app.security.pii import decrypt_sensitive_mapping
 from app.security.tg_auth import (
-    principal_from_request,
     require_owner,
     require_reveal_access,
 )
@@ -258,6 +257,4 @@ def gnom_router(get_engine: Callable[[], Engine]) -> APIRouter:
 
 
 def _require_gnom_owner(request: Request) -> None:
-    principal = principal_from_request(request)
-    if principal is None or principal.role != "owner":
-        raise HTTPException(403, "История Гном доступна только владельцу")
+    require_owner(request)
