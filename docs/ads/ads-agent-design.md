@@ -117,3 +117,4 @@ Router `/api/ads` вызывает `require_owner(request)` на каждом en
 - Telegram и уведомления не содержат телефон;
 - агент создаёт только черновик и никогда не отправляет письмо;
 - полный backend/frontend gate зелёный.
+# HTTP owner-only: без сессии — 401; сессия с ролью не owner — 403.
