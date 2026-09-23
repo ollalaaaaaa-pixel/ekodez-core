@@ -1,10 +1,34 @@
 param([Parameter(Mandatory=$true)][string]$Root,
-      [Parameter(Mandatory=$true)][string]$PythonExecutable)
+      [Parameter(Mandatory=$true)][string]$PythonExecutable,
+      [int]$LockTimeoutMinutes = 10,
+      [switch]$Deployment)
 $ErrorActionPreference = 'Stop'
 $flag = Join-Path $Root 'deploy-in-progress'
-if (Test-Path -LiteralPath $flag) { exit 20 }
+$flagAtEntry = Test-Path -LiteralPath $flag
+if ($flagAtEntry -and -not $Deployment) { exit 20 }
+if ($Deployment -and -not $flagAtEntry) { throw 'Deployment flag required' }
 $backend = [IO.Path]::GetFullPath((Join-Path $Root 'ekodez-core\backend'))
 $log = Join-Path $Root 'logs\autostart-backend.log'
+$lockPath = Join-Path $Root 'logs\backend-restart.lock'
+if ($LockTimeoutMinutes -lt 1) { throw 'Invalid lock timeout' }
+try {
+    $lockStream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write, [IO.FileShare]::None)
+} catch [IO.IOException] {
+    if (-not (Test-Path -LiteralPath $lockPath)) { throw }
+    $age = [DateTime]::UtcNow - (Get-Item -LiteralPath $lockPath).LastWriteTimeUtc
+    if ($age.TotalMinutes -lt $LockTimeoutMinutes) { exit 21 }
+    try { Remove-Item -LiteralPath $lockPath -ErrorAction Stop }
+    catch { exit 21 }
+    Add-Content -LiteralPath $log -Value "[$([DateTimeOffset]::Now.ToString('o'))] WATCHDOG warning=stale_restart_lock"
+    try {
+        $lockStream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None)
+    } catch [IO.IOException] { exit 21 }
+}
+$stopped = $false
+$healthChecked = $false
+try {
 function Get-BackendConnections {
     try { Get-NetTCPConnection -LocalPort 8000 -ErrorAction Stop }
     catch {
@@ -39,44 +63,64 @@ foreach ($connection in $ports) {
         throw 'Unverified port owner'
     }
 }
-if (Test-Path -LiteralPath $flag) { exit 20 }
 $previous = @(Select-String -LiteralPath $log -Pattern 'WRAPPER START backend' -ErrorAction SilentlyContinue)
 $lastStart = if ($previous.Count) { $previous[-1].Line } else { '' }
 Stop-ScheduledTask -TaskName EkodezBackend
-foreach ($candidate in $candidates) {
-    $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($candidate.ProcessId)"
-    if ($current) {
-        if ($current.CreationDate -ne $candidate.CreationDate -or
-            $current.CommandLine -ne $candidate.CommandLine -or
-            $current.ExecutablePath -ne $candidate.ExecutablePath) {
-            throw 'Backend identity changed'
+$stopped = $true
+$operationError = $null
+try {
+    foreach ($candidate in $candidates) {
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($candidate.ProcessId)"
+        if ($current) {
+            if ($current.CreationDate -ne $candidate.CreationDate -or
+                $current.CommandLine -ne $candidate.CommandLine -or
+                $current.ExecutablePath -ne $candidate.ExecutablePath) {
+                throw 'Backend identity changed'
+            }
+            Stop-Process -Id $current.ProcessId -Force
         }
-        Stop-Process -Id $current.ProcessId -Force
     }
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $remaining = @(Get-BackendConnections |
+            Where-Object { $_.State -eq 'Listen' -or $_.OwningProcess -ne 0 })
+        if (-not $remaining.Count) { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    if ($remaining.Count) { throw 'Port not free' }
+} catch {
+    $operationError = $_
+} finally {
+    if (-not $flagAtEntry -and (Test-Path -LiteralPath $flag)) {
+        Add-Content -LiteralPath $log -Value "[$([DateTimeOffset]::Now.ToString('o'))] WATCHDOG warning=deploy_flag_during_restart"
+    }
+    Start-ScheduledTask -TaskName EkodezBackend
 }
-$deadline = (Get-Date).AddSeconds(10)
-do {
-    $remaining = @(Get-BackendConnections |
-        Where-Object { $_.State -eq 'Listen' -or $_.OwningProcess -ne 0 })
-    if (-not $remaining.Count) { break }
-    Start-Sleep -Milliseconds 500
-} while ((Get-Date) -lt $deadline)
-if ($remaining.Count) { throw 'Port not free' }
-if (Test-Path -LiteralPath $flag) { exit 20 }
-Start-ScheduledTask -TaskName EkodezBackend
 $deadline = (Get-Date).AddSeconds(40)
 do {
     Start-Sleep -Seconds 2
     $starts = @(Select-String -LiteralPath $log -Pattern 'WRAPPER START backend' -ErrorAction SilentlyContinue)
     if ($starts.Count -and $starts[-1].Line -ne $lastStart) {
+        $healthChecked = $true
         try {
             $healthy = $true
             foreach ($path in @('/health', '/health/db')) {
                 $response = Invoke-WebRequest ('http://127.0.0.1:8000' + $path) -TimeoutSec 3 -UseBasicParsing
                 if ($response.StatusCode -ne 200 -or ($response.Content | ConvertFrom-Json).status -ne 'ok') { $healthy = $false }
             }
-            if ($healthy) { exit 0 }
+            if ($healthy) {
+                if ($operationError) { exit 22 }
+                exit 0
+            }
         } catch { }
     }
 } while ((Get-Date) -lt $deadline)
 exit 1
+} finally {
+    if (-not $stopped -or $healthChecked) {
+        $lockStream.Dispose()
+        Remove-Item -LiteralPath $lockPath -ErrorAction Stop
+    } else {
+        $lockStream.Dispose()
+    }
+}

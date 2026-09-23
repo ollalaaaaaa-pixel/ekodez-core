@@ -96,6 +96,7 @@ class AdsServicesTest(unittest.TestCase):
                 )
                 session.commit()
                 run = session.scalar(select(AdImportRun))
+                assert run is not None
                 self.assertEqual(summary.period, "2026-09-01..2026-09-30")
                 self.assertEqual(run.period_end, date(2026, 9, 30))
 
@@ -109,6 +110,8 @@ class AdsServicesTest(unittest.TestCase):
                 session.commit()
                 run = session.scalar(select(AdImportRun))
                 notice = session.scalar(select(Notification))
+                assert run is not None
+                assert notice is not None
                 self.assertEqual(run.status, "error")
                 self.assertEqual(notice.kind, "ads_import_error")
                 self.assertNotIn("phone", repr(notice.payload).lower())
@@ -126,6 +129,8 @@ class AdsServicesTest(unittest.TestCase):
                 session.commit()
                 run = session.scalar(select(AdImportRun))
                 notice = session.scalar(select(Notification))
+                assert run is not None
+                assert notice is not None
                 stored = repr((run.source_file, run.error, notice.payload, summary))
                 self.assertNotIn("79215551234", stored)
                 self.assertNotIn("example.ru", stored)

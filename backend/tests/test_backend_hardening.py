@@ -1,13 +1,22 @@
 import asyncio
 import json
 import logging
+import os
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from scripts.backend_watchdog import ALERT, State, cycle, probe_health, save_state
+from scripts.backend_watchdog import (
+    ALERT,
+    State,
+    clear_stale_restart_lock,
+    cycle,
+    probe_health,
+    restart_lock_status,
+    save_state,
+)
 from scripts.run_backend import IsoAccessFormatter, create_config
 
 
@@ -50,6 +59,61 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual(self.tick(1600), "health_warning")
         self.restart.assert_not_called()
         self.notify.assert_not_called()
+
+    def test_stale_lock_after_two_health_failures_restarts_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Path(folder) / "backend-restart.lock"
+            lock.touch()
+            os.utime(lock, (100, 100))
+
+            def restart():
+                self.assertFalse(lock.exists())
+                return self.restart()
+
+            for now, expected in ((1000, "health_warning"), (1300, "restarted")):
+
+                def status(at_time: float = now) -> str:
+                    return restart_lock_status(lock, at_time)
+
+                def clear(at_time: float = now) -> bool:
+                    return clear_stale_restart_lock(lock, at_time)
+
+                self.assertEqual(
+                    cycle(
+                        self.state,
+                        now,
+                        lambda: False,
+                        lambda: False,
+                        restart,
+                        self.notify,
+                        lambda _: None,
+                        lock_status=status,
+                        clear_stale=clear,
+                    ),
+                    expected,
+                )
+            self.restart.assert_called_once()
+            self.notify.assert_called_once_with(ALERT)
+
+    def test_fresh_restart_lock_skips_health_and_restart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Path(folder) / "backend-restart.lock"
+            lock.touch()
+            self.assertEqual(
+                cycle(
+                    self.state,
+                    1000,
+                    lambda: False,
+                    Mock(),
+                    self.restart,
+                    self.notify,
+                    lambda _: None,
+                    lock_status=lambda: restart_lock_status(lock, 1000),
+                    clear_stale=lambda: clear_stale_restart_lock(lock, 1000),
+                ),
+                "lock_busy",
+            )
+            self.restart.assert_not_called()
 
     def test_flag_appearing_during_probe_blocks_restart(self):
         self.state.failures = 1

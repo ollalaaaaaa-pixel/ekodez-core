@@ -15,6 +15,7 @@ from pathlib import Path
 
 ALERT = "backend перезапущен watchdog: health fail x2"
 LOG = logging.getLogger("backend_watchdog")
+RESTART_LOCK_TIMEOUT_SECONDS = 600
 
 
 @dataclass
@@ -31,11 +32,17 @@ def cycle(
     restart: Callable[[], bool],
     notify: Callable[[str], bool],
     save: Callable[[State], None],
+    lock_status: Callable[[], str] | None = None,
+    clear_stale: Callable[[], bool] | None = None,
 ) -> str:
     if deploying():
         state.failures = 0
         save(state)
         return "deploy_skip"
+    if lock_status is not None and lock_status() == "busy":
+        state.failures = 0
+        save(state)
+        return "lock_busy"
     if now < state.cooldown_until:
         return "cooldown"
     healthy = probe()
@@ -51,6 +58,14 @@ def cycle(
         state.failures = 0
         save(state)
         return "deploy_skip"
+    if lock_status is not None:
+        status = lock_status()
+        if status == "busy" or (
+            status == "stale" and (clear_stale is None or not clear_stale())
+        ):
+            state.failures = 0
+            save(state)
+            return "lock_busy"
     # Persist BEFORE the mutation. A crash or failed recovery cannot cause a storm.
     state.failures = 0
     state.cooldown_until = now + 600
@@ -68,6 +83,31 @@ def cycle(
     except Exception:
         sent = False
     return "restarted" if sent else "restarted_alert_failed"
+
+
+def restart_lock_status(
+    path: Path, now: float, timeout: int = RESTART_LOCK_TIMEOUT_SECONDS
+) -> str:
+    try:
+        age = now - path.stat().st_mtime
+    except FileNotFoundError:
+        return "free"
+    return "stale" if age >= timeout else "busy"
+
+
+def clear_stale_restart_lock(
+    path: Path, now: float, timeout: int = RESTART_LOCK_TIMEOUT_SECONDS
+) -> bool:
+    if restart_lock_status(path, now, timeout) != "stale":
+        return False
+    stale = path.with_name(f"{path.name}.stale.{os.getpid()}.{time.time_ns()}")
+    try:
+        os.replace(path, stale)
+        stale.unlink()
+    except OSError:
+        return False
+    LOG.warning("%s event=stale_restart_lock", datetime.now().astimezone().isoformat())
+    return True
 
 
 def probe_health() -> bool:
@@ -136,6 +176,7 @@ def main() -> None:
     logging.basicConfig(filename=logs / "backend-watchdog.log", level=logging.INFO)
     load_dotenv(backend / ".env", override=False)
     state_path = logs / "backend-watchdog-state.json"
+    restart_lock = logs / "backend-restart.lock"
     try:
         with exclusive_lock(logs / "backend-watchdog.lock"):
             # Corrupt state fails closed; never guess away a cooldown.
@@ -179,6 +220,8 @@ def main() -> None:
                 restart,
                 notify_owner,
                 lambda value: save_state(state_path, value),
+                lambda: restart_lock_status(restart_lock, time.time()),
+                lambda: clear_stale_restart_lock(restart_lock, time.time()),
             )
     except Exception:
         event = "watchdog_unavailable"

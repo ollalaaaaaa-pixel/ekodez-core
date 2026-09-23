@@ -22,7 +22,18 @@ function Invoke-CimMethod {
     $sid = if ($Scenario -eq 'otherowner') { 'other' } else { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
     [pscustomobject]@{ReturnValue=0;Sid=$sid}
 }
-function Stop-ScheduledTask { param($TaskName) Record "stop:$TaskName" }
+function Stop-ScheduledTask {
+    param($TaskName)
+    Record "stop:$TaskName"
+    if ($Scenario -eq 'hold_lock') {
+        while (-not (Test-Path -LiteralPath (Join-Path $Root 'release-first-restart'))) {
+            [Threading.Thread]::Sleep(20)
+        }
+    }
+    if ($Scenario -eq 'flag_after_stop') {
+        New-Item -ItemType File -Path (Join-Path $Root 'deploy-in-progress') | Out-Null
+    }
+}
 function Stop-Process { param($Id, [switch]$Force) Record "kill:$Id"; $global:fixtureStopped=$true }
 function Start-ScheduledTask {
     param($TaskName)
@@ -35,5 +46,9 @@ function Invoke-WebRequest {
     Record "probe:$Uri"
     [pscustomobject]@{StatusCode=200;Content='{"status":"ok"}'}
 }
-& $Script -Root $Root -PythonExecutable 'C:\synthetic\python.exe'
+if ($Scenario -eq 'deploy_explicit') {
+    & $Script -Root $Root -PythonExecutable 'C:\synthetic\python.exe' -Deployment
+} else {
+    & $Script -Root $Root -PythonExecutable 'C:\synthetic\python.exe'
+}
 exit $LASTEXITCODE

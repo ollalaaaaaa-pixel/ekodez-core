@@ -7,6 +7,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -291,7 +292,7 @@ class GnomIntegrationTest(unittest.TestCase):
         self.assertEqual(created.json()["amount"], "0.00")
 
     def test_repeat_price_hint_and_lead_history_are_owner_only(self):
-        cases = [
+        cases: list[tuple[str, str, dict[str, Any]]] = [
             ("POST", "/api/gnom/repeat", {"json": {"phone": TEST_PHONE}}),
             ("GET", "/api/gnom/leads/1/history", {}),
             (
