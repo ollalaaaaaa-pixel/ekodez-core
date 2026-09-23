@@ -89,6 +89,7 @@ class RestartScriptTest(unittest.TestCase):
             )
             actions = root / "actions.txt"
             self.last_log = (root / "logs/autostart-backend.log").read_text()
+            self.last_stderr = result.stderr.decode(errors="replace")
             self.last_lock_exists = (root / "logs/backend-restart.lock").exists()
             return result.returncode, (
                 actions.read_text().splitlines() if actions.exists() else []
@@ -152,6 +153,23 @@ class RestartScriptTest(unittest.TestCase):
             ],
         )
         self.assertIn("warning=deploy_flag_during_restart", self.last_log)
+        self.assertFalse(self.last_lock_exists)
+
+    def test_unavailable_log_does_not_interrupt_restart_or_health(self):
+        code, actions = self.simulate("log_unavailable")
+        self.assertEqual(code, 0, self.last_stderr)
+        self.assertEqual(
+            actions,
+            [
+                "stop:EkodezBackend",
+                "kill:99999",
+                "start:EkodezBackend",
+                "probe:http://127.0.0.1:8000/health",
+                "probe:http://127.0.0.1:8000/health/db",
+            ],
+        )
+        self.assertIn("log_write_failed", self.last_stderr)
+        self.assertIn("deploy_flag_during_restart", self.last_stderr)
         self.assertFalse(self.last_lock_exists)
 
     def test_stale_restart_lock_is_removed_before_starting(self):

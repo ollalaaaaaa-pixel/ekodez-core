@@ -10,6 +10,24 @@ if ($Deployment -and -not $flagAtEntry) { throw 'Deployment flag required' }
 $backend = [IO.Path]::GetFullPath((Join-Path $Root 'ekodez-core\backend'))
 $log = Join-Path $Root 'logs\autostart-backend.log'
 $lockPath = Join-Path $Root 'logs\backend-restart.lock'
+function Write-LogSafe([string]$Message) {
+    try {
+        Add-Content -LiteralPath $log -ErrorAction Stop -Value "[$([DateTimeOffset]::Now.ToString('o'))] WATCHDOG $Message"
+    } catch {
+        try { [Console]::Error.WriteLine("WATCHDOG warning=log_write_failed $Message") }
+        catch { } # Even a closed stderr must not interrupt recovery.
+    }
+}
+function Get-WrapperStartSafe {
+    try {
+        $lines = @(Select-String -LiteralPath $log -Pattern 'WRAPPER START backend' -ErrorAction Stop)
+        $line = if ($lines.Count) { $lines[-1].Line } else { '' }
+        return [pscustomobject]@{Available=$true;Line=$line}
+    } catch {
+        Write-LogSafe 'warning=wrapper_log_unavailable'
+        return [pscustomobject]@{Available=$false;Line=''}
+    }
+}
 if ($LockTimeoutMinutes -lt 1) { throw 'Invalid lock timeout' }
 try {
     $lockStream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew,
@@ -20,7 +38,7 @@ try {
     if ($age.TotalMinutes -lt $LockTimeoutMinutes) { exit 21 }
     try { Remove-Item -LiteralPath $lockPath -ErrorAction Stop }
     catch { exit 21 }
-    Add-Content -LiteralPath $log -Value "[$([DateTimeOffset]::Now.ToString('o'))] WATCHDOG warning=stale_restart_lock"
+    Write-LogSafe 'warning=stale_restart_lock'
     try {
         $lockStream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew,
             [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -63,8 +81,7 @@ foreach ($connection in $ports) {
         throw 'Unverified port owner'
     }
 }
-$previous = @(Select-String -LiteralPath $log -Pattern 'WRAPPER START backend' -ErrorAction SilentlyContinue)
-$lastStart = if ($previous.Count) { $previous[-1].Line } else { '' }
+$previous = Get-WrapperStartSafe
 Stop-ScheduledTask -TaskName EkodezBackend
 $stopped = $true
 $operationError = $null
@@ -91,16 +108,21 @@ try {
 } catch {
     $operationError = $_
 } finally {
-    if (-not $flagAtEntry -and (Test-Path -LiteralPath $flag)) {
-        Add-Content -LiteralPath $log -Value "[$([DateTimeOffset]::Now.ToString('o'))] WATCHDOG warning=deploy_flag_during_restart"
+    try {
+        if (-not $flagAtEntry -and (Test-Path -LiteralPath $flag)) {
+            Write-LogSafe 'warning=deploy_flag_during_restart'
+        }
+    } catch {
+        Write-LogSafe 'warning=deploy_flag_check_failed'
     }
     Start-ScheduledTask -TaskName EkodezBackend
 }
 $deadline = (Get-Date).AddSeconds(40)
 do {
     Start-Sleep -Seconds 2
-    $starts = @(Select-String -LiteralPath $log -Pattern 'WRAPPER START backend' -ErrorAction SilentlyContinue)
-    if ($starts.Count -and $starts[-1].Line -ne $lastStart) {
+    $currentStart = Get-WrapperStartSafe
+    if (-not $currentStart.Available -or -not $previous.Available -or
+        ($currentStart.Line -and $currentStart.Line -ne $previous.Line)) {
         $healthChecked = $true
         try {
             $healthy = $true
@@ -117,10 +139,10 @@ do {
 } while ((Get-Date) -lt $deadline)
 exit 1
 } finally {
+    try { $lockStream.Dispose() }
+    catch { Write-LogSafe 'warning=lock_close_failed' }
     if (-not $stopped -or $healthChecked) {
-        $lockStream.Dispose()
-        Remove-Item -LiteralPath $lockPath -ErrorAction Stop
-    } else {
-        $lockStream.Dispose()
+        try { Remove-Item -LiteralPath $lockPath -ErrorAction Stop }
+        catch { Write-LogSafe 'warning=lock_cleanup_failed' }
     }
 }

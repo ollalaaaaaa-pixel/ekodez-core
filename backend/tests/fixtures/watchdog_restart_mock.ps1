@@ -4,6 +4,18 @@ $ErrorActionPreference = 'Stop'
 $global:fixtureStopped = $false
 $global:fixtureActions = Join-Path $Root 'actions.txt'
 function Record([string]$value) { Add-Content -LiteralPath $global:fixtureActions -Value $value }
+function Add-Content {
+    param($LiteralPath, $Value, $ErrorAction)
+    if ($Scenario -eq 'log_unavailable' -and $LiteralPath -like '*autostart-backend.log') {
+        throw 'Synthetic log unavailable'
+    }
+    Microsoft.PowerShell.Management\Add-Content -LiteralPath $LiteralPath -Value $Value
+}
+function Select-String {
+    param($LiteralPath, $Pattern, $ErrorAction)
+    if ($Scenario -eq 'log_unavailable') { throw 'Synthetic log unavailable' }
+    Microsoft.PowerShell.Utility\Select-String -LiteralPath $LiteralPath -Pattern $Pattern
+}
 function Get-CimInstance {
     param($ClassName, $Filter)
     $command = '-m scripts.run_backend --instance-root "' + (Join-Path $Root 'ekodez-core\backend') + '"'
@@ -30,7 +42,7 @@ function Stop-ScheduledTask {
             [Threading.Thread]::Sleep(20)
         }
     }
-    if ($Scenario -eq 'flag_after_stop') {
+    if ($Scenario -in @('flag_after_stop', 'log_unavailable')) {
         New-Item -ItemType File -Path (Join-Path $Root 'deploy-in-progress') | Out-Null
     }
 }
@@ -38,6 +50,7 @@ function Stop-Process { param($Id, [switch]$Force) Record "kill:$Id"; $global:fi
 function Start-ScheduledTask {
     param($TaskName)
     Record "start:$TaskName"
+    if ($Scenario -eq 'log_unavailable') { return }
     Add-Content -LiteralPath (Join-Path $Root 'logs\autostart-backend.log') -Value 'new WRAPPER START backend'
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }

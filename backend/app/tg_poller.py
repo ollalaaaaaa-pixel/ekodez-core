@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.background_workers import ThreadWorker, WorkerRegistry
 from app.finance_categories import (
     INCOME_CATEGORIES_V1,
     classify_finance,
@@ -42,7 +43,7 @@ from app.security.pii import (
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OFFSET_FILE = os.path.join(BASE_DIR, "tg_offset.json")
-_poller_started = False
+_poller_worker: ThreadWorker | None = None
 ATTACHMENTS_DIR = os.path.join(BASE_DIR, "attachments")
 
 _AMOUNT_RE = re.compile(
@@ -944,11 +945,12 @@ def _process_update(
         _handle_agent_message(token, engine, message)
 
 
-def _loop(token: str, engine) -> None:
+def _loop(token: str, engine, stop_event: threading.Event | None = None) -> None:
+    stop = stop_event if stop_event is not None else threading.Event()
     offset = _load_offset()
     allowed_roles = _allowed_sender_roles()
     last_purge: datetime | None = None
-    while True:
+    while not stop.is_set():
         try:
             now = datetime.now(UTC).replace(tzinfo=None)
             if isinstance(engine, Engine) and (
@@ -964,33 +966,48 @@ def _loop(token: str, engine) -> None:
             )
             with urllib.request.urlopen(url, timeout=15) as r:
                 payload = json.loads(r.read().decode("utf-8"))
+            if stop.is_set():
+                break
             updates = payload.get("result", [])
             if updates:
                 print(f"tg updates: {len(updates)}")
             for update in updates:
+                if stop.is_set():
+                    break
                 offset = max(offset, update["update_id"] + 1)
                 _process_update(token, engine, update, allowed_roles)
             _save_offset(offset)
         except Exception:
+            if stop.is_set():
+                break
             traceback.print_exc()
-            time.sleep(3)
-        time.sleep(2)
+            if stop.wait(3):
+                break
+        if stop.wait(2):
+            break
 
 
-def start_poller(engine) -> None:
-    global _poller_started
+def start_poller(engine, registry: WorkerRegistry | None = None) -> None:
+    global _poller_worker
 
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
-        _poller_started = False
         print("TG poller: token not set, skip")
         return
-    thread = threading.Thread(target=_loop, args=(token, engine), daemon=True)
-    thread.start()
-    _poller_started = True
+    if _poller_worker is not None and _poller_worker.thread.is_alive():
+        if registry is not None:
+            registry.register(_poller_worker)
+        return
+    _poller_worker = ThreadWorker(
+        "ekodez-tg-poller", lambda stop: _loop(token, engine, stop)
+    )
+    if registry is None:
+        _poller_worker.start()
+    else:
+        registry.start(_poller_worker)
     print("TG poller: started")
 
 
 def poller_started() -> bool:
     """Вернуть фактический процесс-локальный статус запуска поллера."""
-    return _poller_started
+    return _poller_worker is not None and _poller_worker.thread.is_alive()

@@ -138,7 +138,7 @@ class TelegramAgentTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("token", self.engine)
@@ -163,7 +163,7 @@ class TelegramAgentTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("token", self.engine)
@@ -188,7 +188,7 @@ class TelegramAgentTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("token", self.engine)
