@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Engine, update
 
 from app.models import Lead
+from scripts.maintenance import skip_business_work
 
 
 def retention_cutoff(now: datetime) -> datetime:
@@ -52,6 +53,10 @@ class RetentionWorker:
 
     def run(self) -> None:
         while not self.stop_event.is_set():
+            if skip_business_work("pii-retention"):
+                if self.stop_event.wait(60):
+                    return
+                continue
             try:
                 erased = purge_expired_lead_pii(self.engine)
                 print(

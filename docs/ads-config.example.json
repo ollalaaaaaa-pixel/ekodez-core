@@ -1,4 +1,5 @@
 {
+  "maintenance_mode": true,
   "root": "C:\\D\\Экодез\\ads",
   "scheduler_stale_timeout_minutes": 30,
   "platforms": {

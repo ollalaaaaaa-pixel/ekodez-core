@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 from app.ads.config import AdsConfig, PlatformConfig
 from app.models import Base, Notification, SchedulerJobRun
 from app.reports import scheduler
+from tests.maintenance_helpers import enable_business_automation
 
 
 class AdsSchedulerTest(unittest.TestCase):
     def setUp(self):
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
 

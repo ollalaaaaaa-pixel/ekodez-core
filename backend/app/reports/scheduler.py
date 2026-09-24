@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from datetime import time as datetime_time
 from typing import Literal
@@ -22,6 +23,7 @@ from app.reports.daily import (
     successful_auto_exists,
 )
 from app.tg_poller import send_message
+from scripts.maintenance import skip_business_work
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CHECK_HOURS = (9, 10, 11, 12, 13)
@@ -328,19 +330,32 @@ def run_scheduler_iteration(
     now: datetime,
     auto_package_generator: DocumentGenerator | None = None,
 ) -> None:
+    if skip_business_work("scheduler"):
+        # Advance only the scheduler cursor: no deferred catch-up for paused slots.
+        _record_iteration(engine, now)
+        return
     last_iteration_time = _last_iteration(engine, now)
-    try:
-        run_due_gnom_job(engine, now, last_iteration_time)
-    except Exception as error:
-        _warning("gnom_scheduler_attempt_failed", error)
-    try:
-        run_due_auto(engine, now, auto_package_generator)
-    except Exception as error:
-        _warning("daily_report_job_failed", error)
-    try:
-        run_due_ads_jobs(engine, now, last_iteration_time)
-    except Exception as error:
-        _warning("ads_scheduler_job_failed", error)
+    jobs: tuple[tuple[str, Callable[[], object]], ...] = (
+        (
+            "gnom_scheduler_attempt_failed",
+            lambda: run_due_gnom_job(engine, now, last_iteration_time),
+        ),
+        (
+            "daily_report_job_failed",
+            lambda: run_due_auto(engine, now, auto_package_generator),
+        ),
+        (
+            "ads_scheduler_job_failed",
+            lambda: run_due_ads_jobs(engine, now, last_iteration_time),
+        ),
+    )
+    for error_event, job in jobs:
+        if skip_business_work("scheduler"):
+            break
+        try:
+            job()
+        except Exception as error:
+            _warning(error_event, error)
     _record_iteration(engine, now)
 
 

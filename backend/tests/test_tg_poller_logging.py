@@ -30,6 +30,11 @@ class FakeResponse:
 
 
 class TelegramPollerLoggingTest(unittest.TestCase):
+    def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
+
     def test_health_reports_process_local_poller_state(self):
         with (
             patch.object(tg_poller, "poller_started", return_value=True),

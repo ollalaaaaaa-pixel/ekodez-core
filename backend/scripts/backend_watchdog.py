@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from scripts.maintenance import skip_business_work
+
 ALERT = "backend перезапущен watchdog: health fail x2"
 LOG = logging.getLogger("backend_watchdog")
 RESTART_LOCK_TIMEOUT_SECONDS = 600
@@ -125,6 +127,8 @@ def probe_health() -> bool:
 
 
 def notify_owner(message: str) -> bool:
+    if skip_business_work("watchdog-telegram"):
+        return True  # Deliberately suppressed, not a failed delivery or a retry.
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     owner = os.getenv("OWNER_TG_ID", "")
     if not token or not owner.isdigit():

@@ -50,6 +50,9 @@ class StopLoop(BaseException):
 
 class TelegramAgentTest(unittest.TestCase):
     def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.pii_env = patch.dict(

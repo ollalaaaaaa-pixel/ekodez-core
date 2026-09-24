@@ -615,6 +615,9 @@ class DailyDeliveryTest(unittest.TestCase):
 
 class DailySchedulerTest(unittest.TestCase):
     def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
 

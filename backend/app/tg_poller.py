@@ -40,6 +40,7 @@ from app.security.pii import (
     mask_name,
     protect_lead_pii,
 )
+from scripts.maintenance import maintenance_enabled
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OFFSET_FILE = os.path.join(BASE_DIR, "tg_offset.json")
@@ -862,6 +863,22 @@ def _process_update(
     update: dict,
     allowed_roles: dict[int, str],
 ) -> None:
+    maintenance = maintenance_enabled()
+    if maintenance:
+        # Only explicit read-only staff commands are handled in dry mode.
+        # Channel imports, quiz alerts, callbacks and free-text business input
+        # are acknowledged by the poll offset but never replayed after enabling.
+        manual = update.get("message") or {}
+        actor = (manual.get("from") or {}).get("id")
+        command_parts = str(manual.get("text") or "").split(maxsplit=1)
+        name = command_parts[0].split("@")[0] if command_parts else ""
+        if (
+            not isinstance(actor, int)
+            or actor not in allowed_roles
+            or (manual.get("chat") or {}).get("type") != "private"
+            or name not in {"/health", "/status", "/whoami", "/today"}
+        ):
+            return
     callback = update.get("callback_query")
     if callback is not None:
         sender_value = (callback.get("from") or {}).get("id")
@@ -890,6 +907,12 @@ def _process_update(
         and actor_key is None
         and (message.get("chat") or {}).get("type") == "private"
     )
+
+    if message is not None and command in {"/health", "/status"}:
+        if actor_key is not None and chat_id is not None:
+            state = "on" if maintenance else "off"
+            _send_message(token, chat_id, f"Бот доступен. maintenance_mode={state}")
+        return
 
     if message is not None and command == "/whoami":
         if chat_id is not None:
@@ -953,8 +976,10 @@ def _loop(token: str, engine, stop_event: threading.Event | None = None) -> None
     while not stop.is_set():
         try:
             now = datetime.now(UTC).replace(tzinfo=None)
-            if isinstance(engine, Engine) and (
-                last_purge is None or now - last_purge >= timedelta(minutes=5)
+            if (
+                not maintenance_enabled()
+                and isinstance(engine, Engine)
+                and (last_purge is None or now - last_purge >= timedelta(minutes=5))
             ):
                 purge_expired_client_drafts(engine, now=now)
                 last_purge = now
