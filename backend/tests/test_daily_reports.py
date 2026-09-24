@@ -684,18 +684,19 @@ class DailySchedulerTest(unittest.TestCase):
 
         scheduler._scheduler_worker = None
         warning = io.StringIO()
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch.object(scheduler.threading, "Thread") as thread,
-            redirect_stderr(warning),
-        ):
-            scheduler.start_report_scheduler(self.engine)
-
-        thread.assert_called_once()
-        thread.return_value.start.assert_called_once()
-        self.assertEqual(scheduler.reports_status(), "degraded")
-        self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
-        scheduler._scheduler_worker = None
+        try:
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(scheduler.threading, "Thread") as thread,
+                redirect_stderr(warning),
+            ):
+                scheduler.start_report_scheduler(self.engine)
+                self.assertEqual(scheduler.reports_status(), "degraded")
+            thread.assert_called_once()
+            thread.return_value.start.assert_called_once()
+            self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
+        finally:
+            scheduler._scheduler_worker = None
 
     def test_scheduler_iteration_survives_one_job_exception_and_runs_again(self):
         from app.reports import scheduler

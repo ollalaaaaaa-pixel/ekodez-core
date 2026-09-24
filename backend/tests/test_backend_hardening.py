@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from scripts.backend_watchdog import (
     ALERT,
@@ -173,6 +173,22 @@ class WatchdogTest(unittest.TestCase):
             self.assertFalse(probe_health())
         self.assertEqual(opener.open.call_count, 2)
         self.assertTrue(opener.open.call_args_list[1].args[0].endswith("/health/db"))
+
+    def test_degraded_reports_with_http_200_does_not_restart_backend(self):
+        response = MagicMock()
+        response.status = 200
+        response.read.side_effect = [
+            b'{"status":"ok","reports_status":"degraded","reports_reason":"maintenance_mode"}',
+            b'{"status":"ok","database":"connected"}',
+        ]
+        response.__enter__.return_value = response
+        opener = Mock()
+        opener.open.return_value = response
+        with patch(
+            "scripts.backend_watchdog.urllib.request.build_opener", return_value=opener
+        ):
+            self.assertEqual(self.tick(1000, healthy=probe_health()), "healthy")
+        self.restart.assert_not_called()
 
 
 class BackendHardeningTest(unittest.TestCase):

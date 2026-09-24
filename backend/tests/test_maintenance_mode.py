@@ -37,6 +37,11 @@ class MaintenanceModeTest(unittest.TestCase):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["status"], "ok")
+                if path == "/health":
+                    self.assertEqual(response.json()["reports_status"], "degraded")
+                    self.assertEqual(
+                        response.json()["reports_reason"], "maintenance_mode"
+                    )
             with (
                 patch.object(
                     backend_watchdog, "probe_health", return_value=True

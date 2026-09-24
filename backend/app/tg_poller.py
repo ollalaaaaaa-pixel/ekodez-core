@@ -1023,8 +1023,9 @@ def start_poller(engine, registry: WorkerRegistry | None = None) -> None:
         if registry is not None:
             registry.register(_poller_worker)
         return
+    stop = threading.Event()
     _poller_worker = ThreadWorker(
-        "ekodez-tg-poller", lambda stop: _loop(token, engine, stop)
+        "ekodez-tg-poller", lambda: _loop(token, engine, stop), stop_event=stop
     )
     if registry is None:
         _poller_worker.start()

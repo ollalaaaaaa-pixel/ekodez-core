@@ -25,7 +25,7 @@ from app.auto_contract_packages import (
     AutoPackageSummary,
     run_auto_contract_packages,
 )
-from app.background_workers import WorkerRegistry
+from app.background_workers import WorkerRegistry, write_log_safe
 from app.bank_import import (
     MONEY_QUANTUM,
     BankImportError,
@@ -125,7 +125,7 @@ from app.reports.daily import (
     TelegramDeliveryError,
     send_daily_report,
 )
-from app.reports.scheduler import reports_status, start_report_scheduler
+from app.reports.scheduler import reports_status_details, start_report_scheduler
 from app.security.pii import (
     decrypt_pii,
     decrypt_sensitive_mapping,
@@ -165,6 +165,7 @@ engine = create_app_engine(DATABASE_URL)
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     registry = WorkerRegistry()
     application.state.worker_registry = registry
+    application.state.worker_shutdown_summary = None
     try:
         start_poller(engine, registry=registry)
         start_report_scheduler(engine, _auto_package_documents, registry=registry)
@@ -173,7 +174,12 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         registry.start(worker)
         yield
     finally:
-        registry.shutdown()
+        summary = registry.shutdown()
+        application.state.worker_shutdown_summary = summary
+        write_log_safe(
+            f"worker_shutdown stopped={len(summary['stopped'])} "
+            f"timed_out={len(summary['timed_out'])}"
+        )
 
 
 app = FastAPI(title="Ekodez Core", lifespan=lifespan)
@@ -521,11 +527,17 @@ def logout(response: Response):
 
 @app.get("/health")
 def health():
+    summary = getattr(app.state, "worker_shutdown_summary", None)
+    reports, reason = reports_status_details(
+        workers_stuck=bool(summary and summary["timed_out"])
+    )
     return {
         "status": "ok",
         "telegram": "started" if poller_started() else "stopped",
         "pii": pii_status(),
-        "reports": reports_status(),
+        "reports": reports,
+        "reports_status": reports,
+        "reports_reason": reason,
     }
 
 

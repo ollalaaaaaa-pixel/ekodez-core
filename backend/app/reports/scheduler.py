@@ -23,7 +23,7 @@ from app.reports.daily import (
     successful_auto_exists,
 )
 from app.tg_poller import send_message
-from scripts.maintenance import skip_business_work
+from scripts.maintenance import maintenance_enabled, skip_business_work
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CHECK_HOURS = (9, 10, 11, 12, 13)
@@ -450,9 +450,11 @@ def start_report_scheduler(
         return
     if not reports_configured():
         _warning("reports_scheduler_degraded")
+    stop = threading.Event()
     _scheduler_worker = ThreadWorker(
         "ekodez-report-scheduler",
-        lambda stop: _scheduler_loop(engine, auto_package_generator, stop),
+        lambda: _scheduler_loop(engine, auto_package_generator, stop),
+        stop_event=stop,
     )
     if registry is None:
         _scheduler_worker.start()
@@ -460,6 +462,20 @@ def start_report_scheduler(
         registry.start(_scheduler_worker)
 
 
-def reports_status() -> Literal["ok", "degraded"]:
+def reports_status_details(
+    *, workers_stuck: bool = False
+) -> tuple[Literal["ok", "degraded"], str | None]:
+    if workers_stuck:
+        return "degraded", "workers_stuck"
+    if maintenance_enabled():
+        return "degraded", "maintenance_mode"
     alive = _scheduler_worker is not None and _scheduler_worker.thread.is_alive()
-    return "ok" if alive and reports_configured() else "degraded"
+    if not alive:
+        return "degraded", "scheduler_stopped"
+    if not reports_configured():
+        return "degraded", "not_configured"
+    return "ok", None
+
+
+def reports_status() -> Literal["ok", "degraded"]:
+    return reports_status_details()[0]
