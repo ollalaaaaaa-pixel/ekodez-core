@@ -50,6 +50,7 @@ class AdsParsersTest(unittest.TestCase):
             path = Path(temp_dir) / "calls.xlsx"
             workbook = Workbook()
             sheet = workbook.active
+            assert sheet is not None
             sheet.append(["Дата звонка", "Телефон"])
             sheet.append([datetime(2026, 9, 8, 12, 30), "+7 (921) 555-12-34"])
             workbook.save(path)

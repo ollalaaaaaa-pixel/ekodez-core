@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import threading
-import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from datetime import time as datetime_time
 from typing import Literal
@@ -15,6 +15,7 @@ from app.ads.agent import create_upload_reminders, run_ads_weekly
 from app.ads.config import AdsConfigError, load_ads_config
 from app.ads.importer import import_ads_file
 from app.auto_contract_packages import DocumentGenerator
+from app.background_workers import ThreadWorker, WorkerRegistry
 from app.models import SchedulerJobRun, SchedulerState
 from app.reports.daily import (
     reports_configured,
@@ -22,11 +23,12 @@ from app.reports.daily import (
     successful_auto_exists,
 )
 from app.tg_poller import send_message
+from scripts.maintenance import skip_business_work
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CHECK_HOURS = (9, 10, 11, 12, 13)
 CHECK_MINUTE = 10
-_scheduler_started = False
+_scheduler_worker: ThreadWorker | None = None
 
 
 def _claim_job(
@@ -286,12 +288,20 @@ def _warning(event: str, error: Exception | None = None) -> None:
 
 
 def _scheduler_loop(
-    engine: Engine, auto_package_generator: DocumentGenerator | None = None
+    engine: Engine,
+    auto_package_generator: DocumentGenerator | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
-    while True:
+    stop = stop_event if stop_event is not None else threading.Event()
+    while not stop.is_set():
         now = datetime.now(MOSCOW_TZ)
-        run_scheduler_iteration(engine, now, auto_package_generator)
-        time.sleep(poll_delay_seconds(now))
+        try:
+            run_scheduler_iteration(engine, now, auto_package_generator)
+        except Exception as error:
+            if not stop.is_set():
+                _warning("scheduler_iteration_failed", error)
+        if stop.wait(poll_delay_seconds(now)):
+            break
 
 
 def _last_iteration(engine: Engine, now: datetime) -> datetime:
@@ -320,19 +330,32 @@ def run_scheduler_iteration(
     now: datetime,
     auto_package_generator: DocumentGenerator | None = None,
 ) -> None:
+    if skip_business_work("scheduler"):
+        # Advance only the scheduler cursor: no deferred catch-up for paused slots.
+        _record_iteration(engine, now)
+        return
     last_iteration_time = _last_iteration(engine, now)
-    try:
-        run_due_gnom_job(engine, now, last_iteration_time)
-    except Exception as error:
-        _warning("gnom_scheduler_attempt_failed", error)
-    try:
-        run_due_auto(engine, now, auto_package_generator)
-    except Exception as error:
-        _warning("daily_report_job_failed", error)
-    try:
-        run_due_ads_jobs(engine, now, last_iteration_time)
-    except Exception as error:
-        _warning("ads_scheduler_job_failed", error)
+    jobs: tuple[tuple[str, Callable[[], object]], ...] = (
+        (
+            "gnom_scheduler_attempt_failed",
+            lambda: run_due_gnom_job(engine, now, last_iteration_time),
+        ),
+        (
+            "daily_report_job_failed",
+            lambda: run_due_auto(engine, now, auto_package_generator),
+        ),
+        (
+            "ads_scheduler_job_failed",
+            lambda: run_due_ads_jobs(engine, now, last_iteration_time),
+        ),
+    )
+    for error_event, job in jobs:
+        if skip_business_work("scheduler"):
+            break
+        try:
+            job()
+        except Exception as error:
+            _warning(error_event, error)
     _record_iteration(engine, now)
 
 
@@ -415,22 +438,28 @@ _run_scheduler_iteration = run_scheduler_iteration
 
 
 def start_report_scheduler(
-    engine: Engine, auto_package_generator: DocumentGenerator | None = None
+    engine: Engine,
+    auto_package_generator: DocumentGenerator | None = None,
+    registry: WorkerRegistry | None = None,
 ) -> None:
-    global _scheduler_started
+    global _scheduler_worker
 
-    if _scheduler_started:
+    if _scheduler_worker is not None and _scheduler_worker.thread.is_alive():
+        if registry is not None:
+            registry.register(_scheduler_worker)
         return
     if not reports_configured():
         _warning("reports_scheduler_degraded")
-    thread = threading.Thread(
-        target=_scheduler_loop,
-        args=(engine, auto_package_generator),
-        daemon=True,
+    _scheduler_worker = ThreadWorker(
+        "ekodez-report-scheduler",
+        lambda stop: _scheduler_loop(engine, auto_package_generator, stop),
     )
-    thread.start()
-    _scheduler_started = True
+    if registry is None:
+        _scheduler_worker.start()
+    else:
+        registry.start(_scheduler_worker)
 
 
 def reports_status() -> Literal["ok", "degraded"]:
-    return "ok" if _scheduler_started and reports_configured() else "degraded"
+    alive = _scheduler_worker is not None and _scheduler_worker.thread.is_alive()
+    return "ok" if alive and reports_configured() else "degraded"

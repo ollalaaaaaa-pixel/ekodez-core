@@ -73,13 +73,15 @@ class GnomLeaseTest(unittest.TestCase):
 
     def statuses(self):
         with Session(self.engine) as s:
+            weekly = s.get(GnomWeeklyRun, self.slot.date())
+            assert weekly is not None
             return (
                 list(
                     s.scalars(
                         select(SchedulerJobRun.status).order_by(SchedulerJobRun.id)
                     )
                 ),
-                s.get(GnomWeeklyRun, self.slot.date()).status,
+                weekly.status,
             )
 
     def test_35_minutes_blocks_new_attempt_and_never_marks_ok(self):
@@ -124,6 +126,7 @@ class GnomLeaseTest(unittest.TestCase):
         now = self.slot + timedelta(hours=2)
         with Session(self.engine) as s:
             outer = s.scalar(select(SchedulerJobRun))
+            assert outer is not None
             outer.started_at = (now - timedelta(minutes=10)).replace(tzinfo=None)
             s.commit()
         self.assertFalse(run_due_gnom_job(self.engine, now, now - timedelta(minutes=1)))
@@ -139,8 +142,10 @@ class GnomStoredPiiRegressionTest(unittest.TestCase):
 
         row = fixture()
         book = Workbook()
-        book.active.append(list(HEADERS))
-        book.active.append([row[key] for key in HEADERS])
+        sheet = book.active
+        assert sheet is not None
+        sheet.append(list(HEADERS))
+        sheet.append([row[key] for key in HEADERS])
         output = io.BytesIO()
         book.save(output)
         book.close()

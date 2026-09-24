@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 from app.ads.config import AdsConfig, PlatformConfig
 from app.models import Base, Notification, SchedulerJobRun
 from app.reports import scheduler
+from tests.maintenance_helpers import enable_business_automation
 
 
 class AdsSchedulerTest(unittest.TestCase):
     def setUp(self):
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
 
@@ -36,6 +38,7 @@ class AdsSchedulerTest(unittest.TestCase):
             )
         with Session(self.engine) as session:
             run = session.scalar(select(SchedulerJobRun))
+            assert run is not None
             self.assertEqual(run.status, "ok")
 
     def test_reminder_payload_is_copied_before_session_closes(self):
@@ -109,12 +112,9 @@ class AdsSchedulerTest(unittest.TestCase):
             self.assertEqual(
                 [(row.job_name, row.status) for row in runs], [("ads_import", "ok")]
             )
-            self.assertEqual(
-                session.get(
-                    scheduler.SchedulerState, "core"
-                ).last_iteration_time.minute,
-                16,
-            )
+            state = session.get(scheduler.SchedulerState, "core")
+            assert state is not None
+            self.assertEqual(state.last_iteration_time.minute, 16)
 
     def test_stale_running_attempt_is_recorded_and_retried(self):
         config = AdsConfig(root=Path("C:/synthetic-ads"), platforms={})

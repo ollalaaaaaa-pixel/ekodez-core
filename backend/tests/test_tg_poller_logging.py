@@ -30,6 +30,11 @@ class FakeResponse:
 
 
 class TelegramPollerLoggingTest(unittest.TestCase):
+    def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
+
     def test_health_reports_process_local_poller_state(self):
         with (
             patch.object(tg_poller, "poller_started", return_value=True),
@@ -38,15 +43,14 @@ class TelegramPollerLoggingTest(unittest.TestCase):
             self.assertEqual(main.health()["telegram"], "started")
 
     def test_start_poller_sets_started_state_after_thread_start(self):
-        tg_poller._poller_started = False
         with (
+            patch.object(tg_poller, "_poller_worker", None),
             patch.dict(tg_poller.os.environ, {"TELEGRAM_BOT_TOKEN": "test-token"}),
             patch.object(tg_poller.threading, "Thread") as thread_class,
         ):
             tg_poller.start_poller(object())
-
-        thread_class.return_value.start.assert_called_once_with()
-        self.assertTrue(tg_poller.poller_started())
+            thread_class.return_value.start.assert_called_once_with()
+            self.assertTrue(tg_poller.poller_started())
 
     def test_ingest_logs_external_id_after_successful_commit(self):
         engine = create_engine("sqlite:///:memory:")
@@ -165,7 +169,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("test-token", object())
@@ -204,7 +208,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("test-token", object())
@@ -237,7 +241,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             self.assertRaises(StopLoop),
         ):
             tg_poller._loop("test-token", object())
@@ -264,7 +268,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 "urlopen",
                 return_value=FakeResponse(payload),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             redirect_stdout(output),
             self.assertRaises(StopLoop),
         ):
@@ -282,7 +286,7 @@ class TelegramPollerLoggingTest(unittest.TestCase):
                 "urlopen",
                 side_effect=RuntimeError("diagnostic boom"),
             ),
-            patch.object(tg_poller.time, "sleep", side_effect=StopLoop),
+            patch.object(tg_poller.threading.Event, "wait", side_effect=StopLoop),
             redirect_stderr(error_output),
             self.assertRaises(StopLoop),
         ):

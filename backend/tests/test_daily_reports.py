@@ -615,6 +615,9 @@ class DailyDeliveryTest(unittest.TestCase):
 
 class DailySchedulerTest(unittest.TestCase):
     def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
 
@@ -679,7 +682,7 @@ class DailySchedulerTest(unittest.TestCase):
     def test_missing_daily_configuration_is_degraded_but_scheduler_starts(self):
         from app.reports import scheduler
 
-        scheduler._scheduler_started = False
+        scheduler._scheduler_worker = None
         warning = io.StringIO()
         with (
             patch.dict(os.environ, {}, clear=True),
@@ -692,7 +695,7 @@ class DailySchedulerTest(unittest.TestCase):
         thread.return_value.start.assert_called_once()
         self.assertEqual(scheduler.reports_status(), "degraded")
         self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
-        scheduler._scheduler_started = False
+        scheduler._scheduler_worker = None
 
     def test_scheduler_iteration_survives_one_job_exception_and_runs_again(self):
         from app.reports import scheduler
@@ -763,7 +766,7 @@ class DailySchedulerTest(unittest.TestCase):
     def test_configured_scheduler_starts_once_and_health_is_ok(self):
         from app.reports import scheduler
 
-        scheduler._scheduler_started = False
+        scheduler._scheduler_worker = None
         environment = {
             "TELEGRAM_BOT_TOKEN": "token-marker",
             "OWNER_TG_ID": "12345",
@@ -779,7 +782,7 @@ class DailySchedulerTest(unittest.TestCase):
 
         thread.assert_called_once()
         thread.return_value.start.assert_called_once()
-        scheduler._scheduler_started = False
+        scheduler._scheduler_worker = None
 
 
 class DailyReportApiTest(unittest.TestCase):

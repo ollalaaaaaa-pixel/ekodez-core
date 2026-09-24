@@ -2,9 +2,10 @@ import hashlib
 import io
 import json
 import os
+import threading
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
@@ -44,6 +45,21 @@ class TelegramAuthApiTests(unittest.TestCase):
             clear=False,
         )
         self.environment.start()
+        self.background_mocks = ExitStack()
+        self.addCleanup(self.background_mocks.close)
+        self.background_mocks.enter_context(patch.object(main, "start_poller"))
+        self.background_mocks.enter_context(
+            patch.object(main, "start_report_scheduler")
+        )
+        self.background_mocks.enter_context(
+            patch("app.security.pii_retention.purge_expired_lead_pii", return_value=0)
+        )
+        self.network = self.background_mocks.enter_context(
+            patch(
+                "urllib.request.urlopen",
+                side_effect=AssertionError("unexpected test network"),
+            )
+        )
 
     def tearDown(self):
         self.environment.stop()
@@ -106,6 +122,7 @@ class TelegramAuthApiTests(unittest.TestCase):
     def test_original_challenge_cookie_cannot_be_replayed_after_success(self):
         from app.security.tg_auth import CHALLENGE_COOKIE
 
+        before = set(threading.enumerate())
         with TestClient(main.app) as client:
             issued = client.post("/api/auth/challenge")
             original_cookie = issued.cookies.get(CHALLENGE_COOKIE)
@@ -131,6 +148,8 @@ class TelegramAuthApiTests(unittest.TestCase):
                 )
                 self.assertNotEqual(rows[0].challenge_hash, payload["challenge"])
                 self.assertIsNotNone(rows[0].consumed_at)
+        self.assertEqual(set(threading.enumerate()) - before, set())
+        self.network.assert_not_called()
 
     def test_expired_session_is_rejected(self):
         client = TestClient(main.app)

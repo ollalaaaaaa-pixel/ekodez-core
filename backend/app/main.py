@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -23,6 +25,7 @@ from app.auto_contract_packages import (
     AutoPackageSummary,
     run_auto_contract_packages,
 )
+from app.background_workers import WorkerRegistry
 from app.bank_import import (
     MONEY_QUANTUM,
     BankImportError,
@@ -157,7 +160,23 @@ DOCUMENT_TEMPLATE_DIR = Path(__file__).parents[2] / "docs" / "templates"
 
 engine = create_app_engine(DATABASE_URL)
 
-app = FastAPI(title="Ekodez Core")
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    registry = WorkerRegistry()
+    application.state.worker_registry = registry
+    try:
+        start_poller(engine, registry=registry)
+        start_report_scheduler(engine, _auto_package_documents, registry=registry)
+        worker = RetentionWorker(engine)
+        application.state.pii_retention_worker = worker
+        registry.start(worker)
+        yield
+    finally:
+        registry.shutdown()
+
+
+app = FastAPI(title="Ekodez Core", lifespan=lifespan)
 app.include_router(clients_router(lambda: engine))
 app.include_router(categories_router(lambda: engine))
 app.include_router(ads_router(lambda: engine))
@@ -174,22 +193,6 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
-
-
-@app.on_event("startup")
-def _start_telegram_poller() -> None:
-    start_poller(engine)
-    start_report_scheduler(engine, _auto_package_documents)
-    worker = RetentionWorker(engine)
-    app.state.pii_retention_worker = worker
-    worker.start()
-
-
-@app.on_event("shutdown")
-def _stop_pii_retention() -> None:
-    worker = getattr(app.state, "pii_retention_worker", None)
-    if worker is not None:
-        worker.stop()
 
 
 class TransactionIn(BaseModel):

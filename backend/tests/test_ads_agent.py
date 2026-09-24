@@ -131,6 +131,11 @@ class AdsReminderAgentTest(unittest.TestCase):
             )
             session.commit()
         messages: list[str] = []
+
+        def record_message(value: str) -> bool:
+            messages.append(value)
+            return True
+
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("app.ads.agent.load_ads_config", return_value=config),
@@ -138,26 +143,30 @@ class AdsReminderAgentTest(unittest.TestCase):
             patch.object(smtplib, "SMTP") as smtp,
             patch.object(smtplib, "SMTP_SSL") as smtp_ssl,
         ):
-            result = run_ads_weekly(
-                self.engine, self.now, lambda value: not messages.append(value)
-            )
-            self.assertEqual(len(result["drafts"]), 1)
+            result = run_ads_weekly(self.engine, self.now, record_message)
+            drafts = result["drafts"]
+            assert isinstance(drafts, list)
+            self.assertEqual(len(drafts), 1)
+            assert isinstance(drafts[0], str)
             self.assertEqual(len(messages), 1)
             self.assertNotIn("телефон", messages[0].lower())
             self.assertNotIn("+7", messages[0])
-            self.assertIn(
-                "не отправлено", Path(result["drafts"][0]).read_text(encoding="utf-8")
-            )
+            self.assertIn("не отправлено", Path(drafts[0]).read_text(encoding="utf-8"))
             smtp.assert_not_called()
             smtp_ssl.assert_not_called()
 
     def test_weekly_delivery_retries_once_then_records_failed_notification(self):
         sender_calls: list[str] = []
+
+        def reject_message(message: str) -> bool:
+            sender_calls.append(message)
+            return False
+
         with patch("app.ads.agent.load_ads_config", return_value=self.config):
             result = run_ads_weekly(
                 self.engine,
                 self.now,
-                lambda message: not sender_calls.append(message) and False,
+                reject_message,
             )
         self.assertEqual(len(sender_calls), 2)
         self.assertFalse(result["delivered"])

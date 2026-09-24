@@ -17,6 +17,9 @@ from app.security import pii_retention
 
 class PiiRetentionTest(unittest.TestCase):
     def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
         self.engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},

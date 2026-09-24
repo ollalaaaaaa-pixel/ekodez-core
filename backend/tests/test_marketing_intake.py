@@ -75,6 +75,9 @@ class MarketingIntakeTest(unittest.TestCase):
         self.assertIn("СОГЛАСЕН", self.send("/start quiz_" + "a" * 59, 4))
 
     def setUp(self):
+        from tests.maintenance_helpers import enable_business_automation
+
+        enable_business_automation(self)
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.env = patch.dict(
