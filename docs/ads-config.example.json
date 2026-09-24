@@ -1,0 +1,24 @@
+{
+  "root": "C:\\D\\Экодез\\ads",
+  "scheduler_stale_timeout_minutes": 30,
+  "platforms": {
+    "yandex_direct": {
+      "mode": "manual",
+      "reminder_period_days": 7,
+      "target_cpl": null,
+      "zero_lead_spend_threshold": null
+    },
+    "yandex_business": {
+      "mode": "manual",
+      "reminder_period_days": 7,
+      "target_cpl": null,
+      "zero_lead_spend_threshold": null
+    },
+    "2gis": {
+      "mode": "manual",
+      "reminder_period_days": 7,
+      "target_cpl": null,
+      "zero_lead_spend_threshold": null
+    }
+  }
+}

@@ -231,9 +231,145 @@ class Lead(Base):
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    utm_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    attributed_platform: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True
+    )
+    attribution_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    attributed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),  # noqa: UP017
+    )
+
+
+class AdSpend(Base):
+    __tablename__ = "ad_spend"
+    __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "campaign",
+            "period_start",
+            "period_end",
+            name="uq_ad_spend_platform_campaign_period",
+        ),
+        CheckConstraint("spend >= 0", name="ck_ad_spend_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    campaign: Mapped[str] = mapped_column(String(200))
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    period_end: Mapped[date] = mapped_column(Date)
+    spend: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    impressions: Mapped[int] = mapped_column(default=0)
+    clicks: Mapped[int] = mapped_column(default=0)
+    conversions: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AdCallLog(Base):
+    __tablename__ = "ad_call_log"
+    __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "call_date",
+            "phone_hash",
+            "source_file",
+            name="uq_ad_call_platform_date_hash_file",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    call_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    phone_hash: Mapped[str] = mapped_column(String(64), index=True)
+    source_file: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AdImportRun(Base):
+    __tablename__ = "ad_import_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    source_file: Mapped[str] = mapped_column(String(255))
+    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    rows_imported: Mapped[int] = mapped_column(default=0)
+    rows_updated: Mapped[int] = mapped_column(default=0)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('ads_import_ok', 'ads_import_error', "
+            "'ads_upload_reminder', 'ads_alert', 'draft_ready', "
+            "'ads_delivery_failed')",
+            name="ck_notifications_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SchedulerJobRun(Base):
+    __tablename__ = "scheduler_job_runs"
+    __table_args__ = (
+        UniqueConstraint("run_key", name="uq_scheduler_job_runs_run_key"),
+        CheckConstraint(
+            "status IN ('running', 'ok', 'failed', 'stale_failed')",
+            name="ck_scheduler_job_runs_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    job_name: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class SchedulerState(Base):
+    __tablename__ = "scheduler_state"
+
+    name: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_iteration_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
 
 

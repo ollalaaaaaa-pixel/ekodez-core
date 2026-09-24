@@ -1,6 +1,10 @@
 import { API } from './api'
 
 export type AuthSession = { role: 'owner' | 'master' }
+export type AuthSessionStatus = {
+  authenticated: boolean
+  role: AuthSession['role'] | null
+}
 
 declare global {
   interface Window {
@@ -36,4 +40,10 @@ export async function authenticateTelegramMiniApp(initData: string): Promise<Aut
 
 export function telegramMiniAppInitData(): string {
   return window.Telegram?.WebApp?.initData?.trim() || ''
+}
+
+export async function getAuthSession(): Promise<AuthSessionStatus> {
+  const response = await fetch(`${API}/api/auth/session`, { credentials: 'include' })
+  if (!response.ok) return { authenticated: false, role: null }
+  return await response.json() as AuthSessionStatus
 }

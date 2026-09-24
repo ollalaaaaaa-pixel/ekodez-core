@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.ads.api import ads_router
 from app.auto_contract_packages import (
     AutoPackageDraft,
     AutoPackageSummary,
@@ -157,6 +158,7 @@ engine = create_app_engine(DATABASE_URL)
 app = FastAPI(title="Ekodez Core")
 app.include_router(clients_router(lambda: engine))
 app.include_router(categories_router(lambda: engine))
+app.include_router(ads_router(lambda: engine))
 
 app.add_middleware(
     CORSMiddleware,
@@ -430,6 +432,7 @@ class RawTextIn(BaseModel):
     text: str
     source: str = "telegram"
     utm_source: str | None = Field(default=None, max_length=50)
+    utm_campaign: str | None = Field(default=None, max_length=200)
     category: str | None = None
     amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     execution_date: date | None = None
@@ -2782,6 +2785,8 @@ def ingest_lead(payload: RawTextIn):
         protected = protect_lead_pii(data, payload.text)
         row = Lead(
             source=source_from_utm(payload.utm_source, payload.source),
+            utm_source=payload.utm_source,
+            utm_campaign=payload.utm_campaign,
             category=payload.category,
             external_id=data["external_id"] or None,
             order_at=data["order_at"],

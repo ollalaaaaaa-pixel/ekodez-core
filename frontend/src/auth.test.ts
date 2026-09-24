@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { authenticateTelegramMiniApp } from './auth'
+import { authenticateTelegramMiniApp, getAuthSession } from './auth'
 
 
 afterEach(() => vi.restoreAllMocks())
@@ -32,5 +32,18 @@ describe('authenticateTelegramMiniApp', () => {
     await expect(authenticateTelegramMiniApp('signed-init-data')).rejects.toThrow(
       'Не удалось войти. Настройте роль Telegram в конфиге.',
     )
+  })
+})
+
+describe('getAuthSession', () => {
+  it('restores the owner role from the credentialed session endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: true, role: 'owner' }), { status: 200 }),
+    )
+
+    await expect(getAuthSession()).resolves.toEqual({ authenticated: true, role: 'owner' })
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/session'), {
+      credentials: 'include',
+    })
   })
 })
