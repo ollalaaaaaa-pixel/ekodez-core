@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -21,7 +22,17 @@ from sqlalchemy.pool import StaticPool
 
 from alembic import command
 from app import main
-from app.models import Base, Inventory, Lead, Object, SentReport, Transaction
+from app.models import (
+    Base,
+    GnomSettings,
+    GnomWeeklyRun,
+    Inventory,
+    Lead,
+    Object,
+    SchedulerJobRun,
+    SentReport,
+    Transaction,
+)
 from app.security.pii import protect_lead_pii
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -681,6 +692,73 @@ class DailySchedulerTest(unittest.TestCase):
         thread.return_value.start.assert_called_once()
         self.assertEqual(scheduler.reports_status(), "degraded")
         self.assertIn('"event": "reports_scheduler_degraded"', warning.getvalue())
+        scheduler._scheduler_started = False
+
+    def test_scheduler_iteration_survives_one_job_exception_and_runs_again(self):
+        from app.reports import scheduler
+
+        now = datetime(2026, 9, 14, 9, 10, tzinfo=MOSCOW_TZ)
+        warning = io.StringIO()
+        with (
+            patch(
+                "app.reports.scheduler.run_due_gnom_job",
+                side_effect=[RuntimeError("synthetic"), False],
+            ) as gnom,
+            patch.object(scheduler, "run_due_auto", return_value=False) as reports,
+            redirect_stderr(warning),
+        ):
+            scheduler._run_scheduler_iteration(self.engine, now)
+            scheduler._run_scheduler_iteration(self.engine, now)
+
+        self.assertEqual(gnom.call_count, 2)
+        self.assertEqual(reports.call_count, 2)
+        self.assertIn('"event": "gnom_scheduler_attempt_failed"', warning.getvalue())
+
+    def test_stale_outer_gnom_run_is_recovered_after_two_hours(self):
+        from app.reports import scheduler
+
+        now = datetime(2026, 9, 14, 11, 10, tzinfo=MOSCOW_TZ)
+        with Session(self.engine) as session:
+            session.add(GnomSettings(id=1, weekly_enabled=True))
+            session.add(
+                GnomWeeklyRun(
+                    week=now.date(),
+                    status="running",
+                    started_at=now.replace(hour=9, minute=10, tzinfo=None),
+                )
+            )
+            session.add(
+                SchedulerJobRun(
+                    run_key="2026-09-14:gnom_weekly",
+                    job_name="gnom_weekly",
+                    scheduled_for=now.replace(hour=9, minute=10),
+                    status="running",
+                    started_at=now.replace(hour=9, minute=10),
+                )
+            )
+            session.commit()
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch("app.gnom_scheduler.IMPORT_ROOT", Path(folder)),
+            patch.dict(
+                os.environ, {"TELEGRAM_BOT_TOKEN": "synthetic", "OWNER_TG_ID": "1"}
+            ),
+            patch("app.tg_poller.send_message", return_value=True) as send,
+        ):
+            self.assertTrue(
+                scheduler.run_due_gnom_job(
+                    self.engine, now, now.replace(hour=11, minute=9)
+                )
+            )
+        send.assert_called_once()
+        with Session(self.engine) as session:
+            runs = session.scalars(
+                select(SchedulerJobRun)
+                .where(SchedulerJobRun.job_name == "gnom_weekly")
+                .order_by(SchedulerJobRun.id)
+            ).all()
+            self.assertEqual([run.status for run in runs], ["stale_failed", "ok"])
+            self.assertEqual(runs[0].error_type, "LeaseExpired")
 
     def test_configured_scheduler_starts_once_and_health_is_ok(self):
         from app.reports import scheduler

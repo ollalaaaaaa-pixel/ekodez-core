@@ -103,7 +103,9 @@ class AdsSchedulerTest(unittest.TestCase):
             scheduler.run_scheduler_iteration(self.engine, monday)
             scheduler.run_scheduler_iteration(self.engine, monday.replace(minute=16))
         with Session(self.engine) as session:
-            runs = session.scalars(select(SchedulerJobRun)).all()
+            runs = session.scalars(
+                select(SchedulerJobRun).where(SchedulerJobRun.job_name == "ads_import")
+            ).all()
             self.assertEqual(
                 [(row.job_name, row.status) for row in runs], [("ads_import", "ok")]
             )

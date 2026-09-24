@@ -247,6 +247,9 @@ def receive_client_message(
                     encrypted_pii=protected["encrypted_pii"],
                     reason="Обращение из квиза",
                 )
+                from app.gnom_service import attach_repeat
+
+                attach_repeat(session, lead, "", payload.get("phone") or "")
                 session.add(lead)
                 session.flush()
                 alert = _owner_alert(

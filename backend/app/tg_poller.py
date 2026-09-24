@@ -20,6 +20,7 @@ from app.finance_categories import (
     classify_finance,
     default_finance_category,
 )
+from app.gnom_service import attach_repeat
 from app.inventory import ChemicalUsageIn
 from app.lead_parser import parse_amount_note, parse_order_text
 from app.marketing_intake import purge_expired_client_drafts, receive_client_message
@@ -96,6 +97,7 @@ def _ingest(engine, text: str) -> str | None:
             raw_text=protected["raw_text"],
             encrypted_pii=protected["encrypted_pii"],
         )
+        attach_repeat(session, row, data["address"], data["phone"])
         session.add(row)
         session.commit()
         print(

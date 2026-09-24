@@ -80,7 +80,9 @@ def _existing_completion(session: Session, lead: Lead) -> CompletionResult:
         select(Treatment.id).where(Treatment.lead_id == lead.id).limit(1)
     )
     transaction_id = session.scalar(
-        select(Transaction.id).where(Transaction.lead_id == lead.id).limit(1)
+        select(Transaction.id)
+        .where(Transaction.lead_id == lead.id, Transaction.kind == "income")
+        .limit(1)
     )
     return CompletionResult(
         lead_id=lead.id,
@@ -140,7 +142,9 @@ def complete_lead(
         lead.closed_at = normalized_completed_at.astimezone(UTC)
 
         transaction = session.scalar(
-            select(Transaction).where(Transaction.lead_id == lead.id)
+            select(Transaction).where(
+                Transaction.lead_id == lead.id, Transaction.kind == "income"
+            )
         )
         if lead.amount > 0 and transaction is None:
             transaction = Transaction(

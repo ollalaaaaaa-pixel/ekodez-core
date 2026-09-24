@@ -5,10 +5,12 @@ import {
 } from 'antd'
 import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
 import { API } from './api'
+import GnomLeadHints from './GnomLeadHints'
 import { INCOME_CATEGORIES, LEAD_SOURCES, LEAD_SOURCE_LABELS } from './dictionaries'
 import './LeadsPage.css'
 
 type Lead = {
+  is_repeat?: boolean
   id: number
   source: string
   category: string | null
@@ -61,6 +63,8 @@ export default function LeadsPage() {
   const [filter, setFilter] = useState<'all' | 'today'>('all')
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
+  const intakeAddress = Form.useWatch('address', form)
+  const intakePhone = Form.useWatch('phone', form)
   const isMobile = useIsMobile()
 
   const load = () => {
@@ -341,8 +345,10 @@ export default function LeadsPage() {
                     <span>Дата: {lead.execution_date || 'не назначена'}</span>
                     <span>Услуга: {lead.category || 'не указана'}</span>
                     <span>Сумма: {lead.amount} ₽</span>
+                    {lead.is_repeat ? <Tag color="blue">Объект обслуживался</Tag> : null}
                   </div>
                   {mobileActions(lead)}
+                  {lead.is_repeat ? <GnomLeadHints leadId={lead.id} /> : null}
                 </Card>
               )
             })}
@@ -384,6 +390,7 @@ export default function LeadsPage() {
           <Form.Item name="amount" label="Сумма (необязательно)">
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
           </Form.Item>
+          <GnomLeadHints address={intakeAddress} phone={intakePhone} />
           <Form.Item name="executionDate" label="Дата обработки">
             <Input type="date" />
           </Form.Item>
@@ -403,6 +410,7 @@ export default function LeadsPage() {
         destroyOnHidden
       >
         <Form form={editForm} layout="vertical" onFinish={saveEdit}>
+          {editing?.is_repeat ? <GnomLeadHints key={editing.id} leadId={editing.id} /> : null}
           <Form.Item name="amount" label="Сумма" rules={[{ required: true }]}>
             <InputNumber stringMode min="0" precision={2} style={{ width: '100%' }} />
           </Form.Item>

@@ -68,6 +68,8 @@ from app.finance_categories import (
     classify_finance,
     default_finance_category,
 )
+from app.gnom_api import gnom_router
+from app.gnom_service import attach_repeat
 from app.inventory import (
     LOW_STOCK_RATIO,
     InsufficientInventory,
@@ -159,6 +161,7 @@ app = FastAPI(title="Ekodez Core")
 app.include_router(clients_router(lambda: engine))
 app.include_router(categories_router(lambda: engine))
 app.include_router(ads_router(lambda: engine))
+app.include_router(gnom_router(lambda: engine))
 
 app.add_middleware(
     CORSMiddleware,
@@ -405,6 +408,7 @@ class LeadOut(BaseModel):
 
     id: int
     source: str
+    is_repeat: bool = False
     category: str | None
     external_id: str | None
     order_at: datetime | None
@@ -2814,6 +2818,7 @@ def ingest_lead(payload: RawTextIn):
             raw_text=protected["raw_text"],
             encrypted_pii=protected["encrypted_pii"],
         )
+        attach_repeat(session, row, data["address"], data["phone"])
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -2859,7 +2864,11 @@ def _ensure_lead_income(session: Session, lead: Lead) -> None:
         return
     if lead.execution_date is None:
         raise HTTPException(status_code=422, detail="execution date is required")
-    existing = session.scalar(select(Transaction).where(Transaction.lead_id == lead.id))
+    existing = session.scalar(
+        select(Transaction).where(
+            Transaction.lead_id == lead.id, Transaction.kind == "income"
+        )
+    )
     if existing is not None:
         return
     session.add(
