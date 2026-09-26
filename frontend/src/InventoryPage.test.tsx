@@ -62,6 +62,18 @@ describe('Inventory screen', () => {
     })))
   })
 
+  test('highlights a targeted inventory row and reports a stale target', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/inventory')) return jsonResponse([inventoryRow])
+      return jsonResponse([])
+    })
+    const { rerender } = render(<InventoryPage targetId={1} />)
+    expect(await screen.findByText('Выбран препарат #1')).toBeTruthy()
+    rerender(<InventoryPage targetId={999999} />)
+    expect(await screen.findByText('Запись не найдена')).toBeTruthy()
+  })
+
   test('shows stock, low-stock alert and treatment history', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = String(input)

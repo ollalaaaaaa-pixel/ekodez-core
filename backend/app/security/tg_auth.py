@@ -211,6 +211,14 @@ def authenticate_init_data(
 def principal_from_request(
     request: Request, *, now: int | None = None
 ) -> AuthPrincipal | None:
+    role = signed_session_role(request, now=now)
+    if role not in ("owner", "master"):
+        return None
+    return AuthPrincipal(role="owner" if role == "owner" else "master")
+
+
+def signed_session_role(request: Request, *, now: int | None = None) -> str | None:
+    """Return the role of a valid signed session before endpoint authorization."""
     try:
         stored = _read_signed(request.cookies.get(SESSION_COOKIE), "session")
     except AuthenticationError:
@@ -221,12 +229,13 @@ def principal_from_request(
     role = stored.get("role")
     expires = stored.get("exp")
     if (
-        role not in ("owner", "master")
+        not isinstance(role, str)
+        or not role
         or not isinstance(expires, int)
         or expires < current
     ):
         return None
-    return AuthPrincipal(role=role)
+    return role
 
 
 def clear_session(response: Response) -> None:

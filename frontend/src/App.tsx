@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Badge, Button, Layout, Menu, Typography, Card, Spin } from 'antd'
+import { Alert, Badge, Button, Layout, Menu, Typography, Card, Spin, message } from 'antd'
 import {
   CalendarOutlined,
   DollarOutlined,
@@ -23,6 +23,8 @@ import ClientsPage from './ClientsPage'
 import SettingsPage from './SettingsPage'
 import AdsPage from './AdsPage'
 import type { AuthSession } from './auth'
+import type { ActionTarget } from './actionNavigation'
+import { API } from './api'
 import { authenticateTelegramMiniApp, getAuthSession, telegramMiniAppInitData } from './auth'
 
 const { Header, Sider, Content } = Layout
@@ -43,6 +45,8 @@ const screens: Record<string, string> = {
 
 export default function App() {
   const [current, setCurrent] = useState('day')
+  const [target, setTarget] = useState<ActionTarget | null>(null)
+  const [planGroup, setPlanGroup] = useState<{ kind: ActionTarget['kind']; ids: number[] } | null>(null)
   const [mobileLayout, setMobileLayout] = useState(() => window.innerWidth < 992)
   const [menuCollapsed, setMenuCollapsed] = useState(() => window.innerWidth < 992)
   const initData = telegramMiniAppInitData()
@@ -51,6 +55,27 @@ export default function App() {
   const [role, setRole] = useState<AuthSession['role'] | null>(null)
   const [unreadAds, setUnreadAds] = useState(0)
   const authStarted = useRef(false)
+  const navigate = (screen: string, kind?: ActionTarget['kind']) => {
+    if (!kind) { setTarget(null); setPlanGroup(null); setCurrent(screen); return }
+    if (role !== 'owner' && (kind === 'document' || kind === 'transaction')) return
+    void fetch(`${API}/api/day/action-plan?all=true`, { credentials: 'include' })
+      .then(async response => {
+        if (!response.ok) throw new Error('action plan unavailable')
+        const payload = await response.json() as { group_ids?: Record<string, number[]> }
+        const ids = payload.group_ids?.[kind]
+        if (!Array.isArray(ids)) throw new Error('invalid action plan')
+        setTarget(null)
+        setPlanGroup({ kind, ids })
+        setCurrent(screen)
+      })
+      .catch(() => message.error('Не удалось открыть список дел. Повторите попытку.'))
+  }
+  const openAction = (next: ActionTarget) => {
+    if (role !== 'owner' && (next.kind === 'document' || next.kind === 'transaction')) return
+    setTarget(next)
+    setPlanGroup(null)
+    setCurrent(next.screen)
+  }
 
   useEffect(() => {
     if (authStarted.current) return
@@ -103,7 +128,7 @@ export default function App() {
           mode="inline"
           selectedKeys={[current]}
           onClick={(e) => {
-            setCurrent(e.key)
+            navigate(e.key)
             if (mobileLayout) setMenuCollapsed(true)
           }}
           items={[
@@ -131,21 +156,27 @@ export default function App() {
           </Title>
           {role === 'owner' ? (
             <Badge count={unreadAds}>
-              <Button aria-label="Уведомления рекламы" icon={<NotificationOutlined />} onClick={() => setCurrent('ads')} />
+              <Button aria-label="Уведомления рекламы" icon={<NotificationOutlined />} onClick={() => navigate('ads')} />
             </Badge>
           ) : null}
         </Header>
         <Content className="app-content">
           {current === 'day' ? (
-            <DayPage onNavigate={setCurrent} />
+            <DayPage onNavigate={navigate} onOpen={openAction} />
           ) : current === 'finance' ? (
-            <FinancePage />
+            <FinancePage targetId={target?.screen === 'finance' ? target.id : undefined}
+              planIds={planGroup?.kind === 'transaction' ? planGroup.ids : undefined} />
           ) : current === 'leads' ? (
-            <LeadsPage />
+            <LeadsPage targetId={target?.screen === 'leads' ? target.id : undefined}
+              planIds={planGroup?.kind === 'lead' ? planGroup.ids : undefined} />
           ) : current === 'objects' ? (
-            <ObjectsPage />
+            <ObjectsPage targetId={target?.screen === 'objects' ? target.id : undefined}
+              periodId={target?.kind === 'document' ? target.periodId : undefined}
+              periodMonth={target?.kind === 'document' ? target.periodMonth : undefined}
+              planIds={planGroup?.kind === 'object' || planGroup?.kind === 'document' ? planGroup.ids : undefined} />
           ) : current === 'inventory' ? (
-            <InventoryPage />
+            <InventoryPage targetId={target?.screen === 'inventory' ? target.id : undefined}
+              planIds={planGroup?.kind === 'inventory' ? planGroup.ids : undefined} />
           ) : current === 'dashboard' ? (
             <DashboardPage />
           ) : current === 'clients' ? (

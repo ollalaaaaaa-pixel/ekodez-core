@@ -3,13 +3,15 @@ import {
   Button, Card, Col, DatePicker, Empty, Flex, FloatButton, Input, InputNumber,
   Modal, Popconfirm, Row, Select, Space, Spin, Tag, Typography, message,
 } from 'antd'
-import { ArrowRightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/icons'
+import { CloseOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import './DayPage.css'
 import { API } from './api'
 import { LEAD_SOURCES } from './dictionaries'
 import { useIncomeCategories } from './useIncomeCategories'
 import { validateDayEntry } from './dayEntryValidation'
+import TodayActionPlan from './TodayActionPlan'
+import type { ActionTarget } from './actionNavigation'
 
 const CHANNELS = ['Яндекс', '2ГИС', 'Авито', 'ВК', 'Сарафан', 'Прочее'] as const
 const MARKETING_SOURCES = LEAD_SOURCES.filter(item => ['yandex_direct', 'vk', 'avito', 'seo'].includes(item.value))
@@ -39,7 +41,10 @@ const emptyDraft = (kind: Kind): Draft => ({
 const money = (value: string | number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(Number(value))
 
-export default function DayPage({ onNavigate }: { onNavigate: (screen: string) => void }) {
+export default function DayPage({ onNavigate, onOpen }: {
+  onNavigate: (screen: string, kind?: ActionTarget['kind']) => void
+  onOpen: (target: ActionTarget) => void
+}) {
   const INCOME_CATEGORIES = useIncomeCategories()
   const today = dayjs().format('YYYY-MM-DD')
   const [selectedDate, setSelectedDate] = useState(today)
@@ -47,8 +52,6 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
   const [data, setData] = useState<DayData | null>(null)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [objects, setObjects] = useState<ObjectOption[]>([])
-  const [newLeads, setNewLeads] = useState(0)
-  const [reviewCount, setReviewCount] = useState(0)
   const [telegramStarted, setTelegramStarted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -65,17 +68,14 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
     setLoading(true)
     try {
       const responses = await Promise.all([
-        fetch(`${API}/api/day?date=${selectedDate}`), fetch(`${API}/api/leads`),
-        fetch(`${API}/api/finance/summary`), fetch(`${API}/health`),
+        fetch(`${API}/api/day?date=${selectedDate}`), fetch(`${API}/health`),
         fetch(`${API}/api/expense-categories`), fetch(`${API}/api/objects`),
       ])
       if (responses.some((response) => !response.ok)) throw new Error('Не удалось загрузить дневник')
-      const [dayData, leads, summary, health, expenses, objectRows] = await Promise.all(
+      const [dayData, health, expenses, objectRows] = await Promise.all(
         responses.map((response) => response.json()),
       )
       setData(dayData)
-      setNewLeads(leads.filter((lead: { status: string }) => lead.status === 'new').length)
-      setReviewCount(summary.review_count ?? 0)
       setTelegramStarted(health.telegram === 'started')
       setExpenseCategories(expenses)
       setObjects(objectRows)
@@ -213,6 +213,7 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
   return (
     <Spin spinning={loading}>
       <div className="day-page">
+        <TodayActionPlan onNavigate={onNavigate} onOpen={onOpen} />
         <Flex className="day-toolbar" justify="space-between" align="center" gap={12} wrap>
           <Space wrap>
             <DatePicker allowClear={false} value={dayjs(selectedDate)} format="DD.MM.YYYY"
@@ -251,10 +252,6 @@ export default function DayPage({ onNavigate }: { onNavigate: (screen: string) =
             </Flex>))}
         </Card>
 
-        <Row gutter={[12, 12]}>
-          <Col xs={24} md={12}><Button className="day-action-button" block onClick={() => onNavigate('leads')}>Новые заявки {newLeads} <ArrowRightOutlined /></Button></Col>
-          <Col xs={24} md={12}><Button className="day-action-button" block onClick={() => onNavigate('finance')}>На проверку {reviewCount} <ArrowRightOutlined /></Button></Col>
-        </Row>
       </div>
 
       <FloatButton className="day-mobile-float" type="primary" icon={<PlusOutlined />} tooltip="Добавить запись"

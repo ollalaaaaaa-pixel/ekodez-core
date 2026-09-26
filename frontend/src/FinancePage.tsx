@@ -88,10 +88,11 @@ const marketingSourceLabel = Object.fromEntries(
   MARKETING_SOURCES.map((item) => [item.value, item.label]),
 )
 
-export default function FinancePage() {
+export default function FinancePage({ targetId, planIds }: { targetId?: number; planIds?: number[] }) {
   const incomeCategories = useIncomeCategories()
   const [summary, setSummary] = useState<Summary | null>(null)
   const [rows, setRows] = useState<Tx[]>([])
+  const [rowsLoaded, setRowsLoaded] = useState(false)
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const [draftAmounts, setDraftAmounts] = useState<Record<number, string | null>>({})
   const [period, setPeriod] = useState<PeriodKey>('month')
@@ -120,7 +121,7 @@ export default function FinancePage() {
       .catch(() => setError('Бэкенд недоступен. Запусти uvicorn.'))
     fetch(API + '/api/transactions')
       .then((r) => r.json())
-      .then(setRows)
+      .then((data: Tx[]) => { setRows(data); setRowsLoaded(true) })
       .catch(() => setError('Бэкенд недоступен. Запусти uvicorn.'))
     fetch(API + '/api/objects')
       .then((r) => r.json())
@@ -481,8 +482,12 @@ export default function FinancePage() {
         </Spin>
       </Card>
       <Card style={{ marginTop: 16 }} title="Операции">
+        {planIds && <Typography.Paragraph>Операции из плана: {planIds.length}</Typography.Paragraph>}
+        {targetId !== undefined && rowsLoaded && (rows.some(row => row.id === targetId)
+          ? <Typography.Paragraph>Выбрана операция #{targetId}</Typography.Paragraph>
+          : <Typography.Paragraph type="warning">Запись не найдена</Typography.Paragraph>)}
         <Select mode="multiple" aria-label="Фильтр по тегам" placeholder="Фильтр по тегам" allowClear style={{ minWidth: 260, marginBottom: 12 }} value={tagFilter} onChange={setTagFilter} options={[...new Set(rows.flatMap(row => row.tags ?? []))].sort().map(value => ({ value, label: value }))} />
-        <Table rowKey="id" columns={columns as any} dataSource={rows.filter(row => tagFilter.every(tag => (row.tags ?? []).includes(tag)))} pagination={{ pageSize: 10 }} />
+        <Table rowKey="id" columns={columns as any} dataSource={rows.filter(row => targetId !== undefined ? row.id === targetId : planIds ? planIds.includes(row.id) : tagFilter.every(tag => (row.tags ?? []).includes(tag)))} pagination={{ pageSize: 10 }} />
       </Card>
       <BankImportDrawer
         open={bankImportOpen}

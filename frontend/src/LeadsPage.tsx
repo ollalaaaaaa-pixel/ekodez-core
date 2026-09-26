@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
   Segmented, Statistic, Table, Tag, Typography, message,
@@ -53,8 +53,11 @@ const statusLabel: Record<string, { text: string; color: string }> = {
   cancelled: { text: 'Отмена', color: 'default' },
 }
 
-export default function LeadsPage() {
+export default function LeadsPage({ targetId, planIds }: { targetId?: number; planIds?: number[] }) {
   const [rows, setRows] = useState<Lead[]>([])
+  const [rowsLoaded, setRowsLoaded] = useState(false)
+  const [targetNotFound, setTargetNotFound] = useState(false)
+  const handledTarget = useRef<number | null>(null)
   const [error, setError] = useState('')
   const [intakeOpen, setIntakeOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -70,7 +73,7 @@ export default function LeadsPage() {
   const load = () => {
     fetch(API + '/api/leads')
       .then((r) => r.json())
-      .then(setRows)
+      .then((data: Lead[]) => { setRows(data); setRowsLoaded(true) })
       .catch(() => setError('Бэкенд недоступен. Запусти uvicorn.'))
   }
 
@@ -160,6 +163,15 @@ export default function LeadsPage() {
       performed_by: lead.performed_by,
     })
   }
+
+  useEffect(() => {
+    if (targetId === undefined || !rowsLoaded || handledTarget.current === targetId) return
+    handledTarget.current = targetId
+    const target = rows.find((row) => row.id === targetId)
+    setTargetNotFound(!target)
+    if (target) { setFilter('all'); openEdit(target) }
+    else setEditing(null)
+  }, [targetId, rows, rowsLoaded])
 
   const saveEdit = async (values: {
     amount: string | number
@@ -282,7 +294,7 @@ export default function LeadsPage() {
 
   const newCount = rows.filter((r) => r.status === 'new').length
   const today = new Date().toLocaleDateString('en-CA')
-  const visibleRows = filter === 'all' ? rows : rows.filter((row) =>
+  const visibleRows = planIds ? rows.filter(row => planIds.includes(row.id)) : filter === 'all' ? rows : rows.filter((row) =>
     row.execution_date !== null && row.execution_date <= today
     && (row.status === 'new' || row.status === 'in_work'))
 
@@ -317,6 +329,8 @@ export default function LeadsPage() {
         </Col>
       </Row>
       {error ? <Typography.Paragraph type="warning">{error}</Typography.Paragraph> : null}
+      {targetNotFound && <Typography.Paragraph type="warning">Запись не найдена</Typography.Paragraph>}
+      {planIds && <Typography.Paragraph>Заявки из плана: {planIds.length}</Typography.Paragraph>}
       <Card
         style={{ marginTop: 16 }}
         title="Заявки"
@@ -337,7 +351,7 @@ export default function LeadsPage() {
             {visibleRows.map((lead) => {
               const status = statusLabel[lead.status] ?? statusLabel.new
               return (
-                <Card key={lead.id} data-testid="lead-mobile-card" size="small" title={`Заявка #${lead.id}`} extra={<Tag color={status.color}>{status.text}</Tag>}>
+                <Card key={lead.id} data-testid="lead-mobile-card" data-selected={lead.id === targetId} size="small" title={`Заявка #${lead.id}`} extra={<Tag color={status.color}>{status.text}</Tag>}>
                   <div className="lead-mobile-details">
                     <strong>{lead.client_name || 'Клиент'}</strong>
                     <span>{lead.phone || 'Телефон не указан'}</span>

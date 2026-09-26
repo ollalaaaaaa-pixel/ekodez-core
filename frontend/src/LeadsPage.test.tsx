@@ -51,6 +51,14 @@ describe('Lead PII reveal', () => {
     document.body.replaceChildren()
   })
 
+  test('opens a targeted lead and reports a stale target', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => jsonResponse([maskedLead]))
+    const { rerender } = render(<LeadsPage targetId={1} />)
+    expect(await screen.findByRole('dialog', { name: /Редактировать/ })).toBeTruthy()
+    rerender(<LeadsPage targetId={999999} />)
+    expect(await screen.findByText('Запись не найдена')).toBeTruthy()
+  })
+
   test('shows masks by default and reveals one lead after confirmation', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

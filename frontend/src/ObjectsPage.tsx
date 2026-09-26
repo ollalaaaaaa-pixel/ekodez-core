@@ -79,8 +79,16 @@ const dateLabel = (value: string | null) => {
   return `${day}.${month}.${year}`
 }
 
-export default function ObjectsPage() {
+export default function ObjectsPage({ targetId, periodMonth, periodId, planIds }: {
+  targetId?: number
+  periodMonth?: string
+  periodId?: number
+  planIds?: number[]
+}) {
   const [rows, setRows] = useState<ServiceObject[]>([])
+  const [rowsLoaded, setRowsLoaded] = useState(false)
+  const [targetNotFound, setTargetNotFound] = useState(false)
+  const handledTarget = useRef<number | null>(null)
   const [typeFilter, setTypeFilter] = useState<string>()
   const [statusFilter, setStatusFilter] = useState<string>()
   const [createOpen, setCreateOpen] = useState(false)
@@ -100,7 +108,7 @@ export default function ObjectsPage() {
     fetch(`${API}/api/objects${suffix}`)
       .then((response) => response.json())
       .then((data: ServiceObject[]) => {
-        if (listRequest.current === requestId) setRows(data)
+        if (listRequest.current === requestId) { setRows(data); setRowsLoaded(true) }
       })
       .catch(() => {
         if (listRequest.current === requestId) message.error('Не удалось загрузить объекты')
@@ -153,6 +161,15 @@ export default function ObjectsPage() {
     const history = response.ok ? ((await response.json()) as Treatment[]) : []
     if (historyRequest.current === requestId) setTreatments(history)
   }
+
+  useEffect(() => {
+    if (targetId === undefined || !rowsLoaded || handledTarget.current === targetId) return
+    handledTarget.current = targetId
+    const target = rows.find((row) => row.id === targetId)
+    setTargetNotFound(!target)
+    if (target) void openCard(target)
+    else setSelected(null)
+  }, [targetId, rows, rowsLoaded])
 
   const closeCard = () => {
     historyRequest.current += 1
@@ -207,6 +224,8 @@ export default function ObjectsPage() {
 
   return (
     <div>
+      {targetNotFound && <Typography.Paragraph type="warning">Запись не найдена</Typography.Paragraph>}
+      {planIds && <Typography.Paragraph>Объекты из плана: {planIds.length}</Typography.Paragraph>}
       <Card>
         <Space wrap>
           <Typography.Title level={4} style={{ margin: 0 }}>
@@ -235,7 +254,7 @@ export default function ObjectsPage() {
       </Card>
 
       <Card style={{ marginTop: 16 }}>
-        <Table rowKey="id" columns={columns} dataSource={rows} pagination={{ pageSize: 10 }} />
+        <Table rowKey="id" columns={columns} dataSource={planIds ? rows.filter(row => planIds.includes(row.id)) : rows} pagination={{ pageSize: 10 }} />
       </Card>
 
       <Modal
@@ -321,7 +340,8 @@ export default function ObjectsPage() {
               </Descriptions.Item>
             </Descriptions>
 
-            <ContractPanel object={selected} onObjectUpdated={objectUpdated} />
+            <ContractPanel object={selected} onObjectUpdated={objectUpdated}
+              targetPeriodMonth={periodMonth} targetPeriodId={periodId} />
 
             <Card title="История обработок" size="small">
               {treatments.length ? (

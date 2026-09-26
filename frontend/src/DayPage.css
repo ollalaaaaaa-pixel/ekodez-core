@@ -14,7 +14,6 @@
 .day-entry-form { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 16px; }
 .day-entry-form .ant-input-number, .day-entry-form .ant-input,
 .day-entry-form .ant-select, .day-entry-form .ant-btn,
-.day-action-button { min-height: 44px; }
 .day-category-select { min-width: 220px; flex: 1; }
 .day-channel-select { min-width: 190px; }
 .day-new-category { min-height: 44px; }
@@ -26,7 +25,6 @@
 .day-entry-note { margin-top: 3px; overflow: hidden; color: #8c8c8c; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .income-value { color: #237804; font-weight: 700; }
 .expense-value { color: #a8071a; font-weight: 700; }
-.day-action-button { font-weight: 600; }
 .day-mobile-float { display: none; }
 .day-mobile-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .day-mobile-grid .ant-btn, .day-mobile-amount, .ant-modal .ant-btn { min-height: 48px; }

@@ -1,0 +1,17 @@
+.today-plan { border-radius: 14px; border-left: 5px solid #389e0d; }
+.today-plan-counters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.today-plan-counters span { background: #f1f8ec; padding: 6px 10px; border-radius: 8px; }
+.today-plan-priority, .today-plan-more { display: grid; gap: 8px; }
+.today-action { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid #edf0e9; border-radius: 10px; }
+.today-action-copy { display: grid; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.today-action-copy span { color: #667085; font-size: 12px; }
+.today-action .ant-btn { min-height: 44px; }
+.today-plan-more { margin-top: 8px; }
+.today-plan-more summary { cursor: pointer; padding: 10px 2px; }
+.today-plan-sections { display: flex; flex-wrap: wrap; margin-top: 8px; }
+.today-plan-sections .ant-btn { white-space: normal; height: auto; text-align: left; }
+@media (max-width: 390px) {
+  .today-plan .ant-card-body { padding: 14px; }
+  .today-action { flex-wrap: wrap; }
+  .today-action .ant-btn { margin-left: auto; }
+}

@@ -105,6 +105,32 @@ def _datetime_bounds(report_date: date) -> tuple[datetime, datetime]:
     return utc_start, utc_start + timedelta(days=1)
 
 
+def list_due_objects(session: Session, report_date: date) -> list[Object]:
+    """Shared read-only source for the daily report and action plan."""
+    return list(
+        session.scalars(
+            select(Object)
+            .where(
+                Object.next_treatment_date.is_not(None),
+                Object.next_treatment_date <= report_date,
+                Object.status != "inactive",
+            )
+            .order_by(Object.next_treatment_date, Object.id)
+        ).all()
+    )
+
+
+def list_low_stock_inventory(session: Session) -> list[Inventory]:
+    rows = session.scalars(
+        select(Inventory).order_by(Inventory.chemical_name, Inventory.id)
+    ).all()
+    return [
+        row
+        for row in rows
+        if Decimal(row.quantity) < Decimal(row.initial_quantity) * LOW_STOCK_RATIO
+    ]
+
+
 def build_daily_snapshot(session: Session, report_date: date) -> ReportSnapshot:
     confirmed = Transaction.review_required.is_(False)
     revenue = _money(
@@ -160,16 +186,7 @@ def build_daily_snapshot(session: Session, report_date: date) -> ReportSnapshot:
         or 0
     )
 
-    current_date = report_date + timedelta(days=1)
-    overdue_rows = session.scalars(
-        select(Object)
-        .where(
-            Object.next_treatment_date.is_not(None),
-            Object.next_treatment_date < current_date,
-            Object.status != "inactive",
-        )
-        .order_by(Object.next_treatment_date, Object.id)
-    ).all()
+    overdue_rows = list_due_objects(session, report_date)
     overdue_objects = tuple(
         OverdueObject(
             name=(f"Объект #{row.id}" if row.type == "apartment" else row.name),
@@ -179,9 +196,7 @@ def build_daily_snapshot(session: Session, report_date: date) -> ReportSnapshot:
         if row.next_treatment_date is not None
     )
 
-    inventory_rows = session.scalars(
-        select(Inventory).order_by(Inventory.chemical_name, Inventory.id)
-    ).all()
+    inventory_rows = list_low_stock_inventory(session)
     low_stock_items = tuple(
         LowStockItem(
             chemical_name=row.chemical_name,
@@ -189,7 +204,6 @@ def build_daily_snapshot(session: Session, report_date: date) -> ReportSnapshot:
             unit=row.unit,
         )
         for row in inventory_rows
-        if Decimal(row.quantity) < Decimal(row.initial_quantity) * LOW_STOCK_RATIO
     )
 
     return ReportSnapshot(

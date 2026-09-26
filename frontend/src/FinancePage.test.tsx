@@ -11,6 +11,22 @@ const jsonResponse = (body: unknown) =>
 describe('Finance object linking', () => {
   beforeEach(() => vi.restoreAllMocks())
 
+  test('opens a targeted transaction and reports a stale target', async () => {
+    const row = { id: 7, source: 'manual', operation_date: '2026-09-01', amount: '10.00', currency: 'RUB', counterparty: null, description: 'Целевая операция', category: 'Другие работы', kind: 'income', review_required: true, object_id: null, object_name: null, lead_id: null, tags: [] }
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/transactions')) return jsonResponse([row])
+      if (url.endsWith('/api/finance/summary')) return jsonResponse({ income: '0.00', expense: '0.00', review_count: 1 })
+      if (url.includes('/api/analytics/channels')) return jsonResponse({ period_total: '0.00', channels: [] })
+      return jsonResponse([])
+    })
+    const { rerender } = render(<FinancePage targetId={7} />)
+    expect(await screen.findByText('Целевая операция')).toBeTruthy()
+    expect(await screen.findByText('Выбрана операция #7')).toBeTruthy()
+    rerender(<FinancePage targetId={999999} />)
+    expect(await screen.findByText('Запись не найдена')).toBeTruthy()
+  })
+
   test('tag filter displays only matching transactions', async () => {
     const base = { source: 'manual', operation_date: '2026-09-01', amount: '10.00', currency: 'RUB', counterparty: null, category: 'Другие работы', kind: 'income', review_required: false, object_id: null, object_name: null, lead_id: null }
     const rows = [

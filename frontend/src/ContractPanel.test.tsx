@@ -31,6 +31,29 @@ const input = (label: string) => screen.getByLabelText(label) as HTMLInputElemen
 describe('Safe monthly package editing', () => {
   beforeEach(() => vi.restoreAllMocks())
 
+  test('opens the targeted period month and rejects a stale period id', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url) =>
+      String(url).includes('/package/') ? response(saved) : response([]))
+    const { rerender } = render(<ContractPanel object={object} onObjectUpdated={vi.fn()}
+      targetPeriodMonth="2026-08" targetPeriodId={3} />)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/package/2026-08'))).toBe(true))
+    await waitFor(() => expect(input('Месяц').value).toBe('2026-08'))
+    rerender(<ContractPanel object={object} onObjectUpdated={vi.fn()}
+      targetPeriodMonth="2026-08" targetPeriodId={999999} />)
+    expect(await screen.findByText('Запись не найдена')).toBeTruthy()
+  })
+
+  test('opens a due package month even before a period record exists', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url) =>
+      String(url).includes('/package/')
+        ? response({ period: null, inspection: null, revision: 'new' })
+        : response([]))
+    render(<ContractPanel object={object} onObjectUpdated={vi.fn()} targetPeriodMonth="2026-09" />)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) =>
+      String(url).endsWith('/package/2026-09'))).toBe(true))
+    await waitFor(() => expect(input('Месяц').value).toBe('2026-09'))
+  })
+
   function setup(state = saved) {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {
       if (String(url).includes('/package/')) {

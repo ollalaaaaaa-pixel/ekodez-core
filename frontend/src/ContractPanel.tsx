@@ -85,14 +85,19 @@ const priceLabel = (value: string, periodicity: ContractSummary['periodicity']) 
 export default function ContractPanel({
   object,
   onObjectUpdated,
+  targetPeriodMonth,
+  targetPeriodId,
 }: {
   object: ObjectSummary
   onObjectUpdated: (value: ObjectSummary) => void
+  targetPeriodMonth?: string
+  targetPeriodId?: number
 }) {
   const [contractOpen, setContractOpen] = useState(false)
   const [billingOpen, setBillingOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [packageOpen, setPackageOpen] = useState(false)
+  const [targetNotFound, setTargetNotFound] = useState(false)
   const [timeline, setTimeline] = useState<TimelineEvent[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [period, setPeriod] = useState<Period | null>(null)
@@ -231,7 +236,7 @@ export default function ContractPanel({
     setEditConfirmed(false)
   }
 
-  const loadPackage = async (month: string) => {
+  const loadPackage = async (month: string, expectedId?: number) => {
     const requestId = ++packageRequest.current
     setPackageState(null)
     setPeriod(null)
@@ -243,6 +248,13 @@ export default function ContractPanel({
       const response = await fetch(`${API}/api/contracts/${object.contract.id}/package/${month}`)
       if (!response.ok) throw new Error('Не удалось загрузить пакет')
       const state = await response.json() as PackageState
+      if (expectedId !== undefined && state.period?.id !== expectedId) {
+        if (requestId === packageRequest.current) {
+          setTargetNotFound(true)
+          setPackageOpen(false)
+        }
+        return
+      }
       if (requestId === packageRequest.current) displayPackage(state, month)
     } catch {
       if (requestId === packageRequest.current) message.error('Не удалось загрузить пакет. Повторите открытие формы.')
@@ -251,19 +263,26 @@ export default function ContractPanel({
     }
   }
 
-  const openPackage = async () => {
+  const openPackage = async (monthOverride?: string, expectedId?: number) => {
     packageForm.resetFields()
+    setTargetNotFound(false)
     setPackageOpen(true)
     const now = new Date()
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const month = monthOverride ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     packageForm.setFieldValue('month', month)
-    void loadPackage(month)
+    void loadPackage(month, expectedId)
     try {
       const response = await fetch(`${API}/api/transactions`)
       const rows = response.ok ? ((await response.json()) as Transaction[]) : []
       setTransactions(rows.filter(row => row.kind === 'income' && !row.review_required && row.object_id === object.id))
     } catch { setTransactions([]) }
   }
+
+  useEffect(() => {
+    if (targetPeriodMonth) {
+      void openPackage(targetPeriodMonth, targetPeriodId)
+    }
+  }, [targetPeriodMonth, targetPeriodId, object.id])
 
   const savePackage = async (generate: boolean) => {
     if (!object.contract || !packageState || packageBusy) return
@@ -314,6 +333,7 @@ export default function ContractPanel({
   return (
     <>
       {confirmationContext}
+      {targetNotFound && <Typography.Text type="danger">Запись не найдена</Typography.Text>}
       <Card title="Документы" size="small">
         <Space orientation="vertical" style={{ width: '100%' }}>
           {object.contract ? (
@@ -340,7 +360,7 @@ export default function ContractPanel({
             <Button onClick={openContract}>Настроить договор</Button>
             <Button onClick={openBilling}>Плательщик и реквизиты</Button>
             <Button onClick={() => setProfileOpen(true)}>Реквизиты ЭКОДЕЗ</Button>
-            {object.contract ? <Button type="primary" onClick={openPackage}>Пакет за месяц</Button> : null}
+            {object.contract ? <Button type="primary" onClick={() => void openPackage()}>Пакет за месяц</Button> : null}
           </Space>
         </Space>
       </Card>

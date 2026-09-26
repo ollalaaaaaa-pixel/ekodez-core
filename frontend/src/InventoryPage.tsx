@@ -89,8 +89,9 @@ const useIsMobile = () => {
   return mobile
 }
 
-export default function InventoryPage() {
+export default function InventoryPage({ targetId, planIds }: { targetId?: number; planIds?: number[] }) {
   const [inventory, setInventory] = useState<Inventory[]>([])
+  const [inventoryLoaded, setInventoryLoaded] = useState(false)
   const [treatments, setTreatments] = useState<Treatment[]>([])
   const [objects, setObjects] = useState<ServiceObject[]>([])
   const [search, setSearch] = useState('')
@@ -109,6 +110,7 @@ export default function InventoryPage() {
     const response = await fetch(`${API}/api/inventory${suffix}`)
     if (!response.ok) throw new Error('inventory request failed')
     setInventory(await response.json())
+    setInventoryLoaded(true)
   }, [lowOnly, search])
 
   const loadRelated = useCallback(async () => {
@@ -166,6 +168,8 @@ export default function InventoryPage() {
   }
 
   const lowCount = inventory.filter((row) => row.low_stock).length
+  const visibleInventory = targetId !== undefined ? inventory.filter(row => row.id === targetId)
+    : planIds ? inventory.filter(row => planIds.includes(row.id)) : inventory
   const objectNames = new Map(objects.map((row) => [row.id, row.name]))
 
   return (
@@ -202,12 +206,16 @@ export default function InventoryPage() {
           description="Осталось менее 10% исходного количества партии"
         />
       ) : null}
+      {planIds && <Typography.Paragraph>Препараты из плана: {planIds.length}</Typography.Paragraph>}
 
       <Card title="Остатки препаратов">
+        {targetId !== undefined && inventoryLoaded && (visibleInventory.length
+          ? <Typography.Paragraph>Выбран препарат #{targetId}</Typography.Paragraph>
+          : <Typography.Paragraph type="warning">Запись не найдена</Typography.Paragraph>)}
         {isMobile ? (
           <div className="inventory-mobile-list">
-            {inventory.map((row) => (
-              <Card key={row.id} data-testid="inventory-mobile-card" size="small" title={row.chemical_name}>
+            {visibleInventory.map((row) => (
+              <Card key={row.id} data-testid="inventory-mobile-card" data-selected={row.id === targetId} size="small" title={row.chemical_name}>
                 <div className="inventory-mobile-details">
                   <strong>{row.quantity} {row.unit}</strong>
                   <span>Партия: {row.batch_number}</span>
@@ -220,7 +228,7 @@ export default function InventoryPage() {
           </div>
         ) : <div data-testid="inventory-desktop-table"><Table
           rowKey="id"
-          dataSource={inventory}
+          dataSource={visibleInventory}
           pagination={{ pageSize: 10 }}
           columns={[
             { title: 'Препарат', dataIndex: 'chemical_name' },

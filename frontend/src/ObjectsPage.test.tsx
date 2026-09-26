@@ -42,6 +42,18 @@ const jsonResponse = (body: unknown) =>
 describe('Objects screen', () => {
   beforeEach(() => vi.restoreAllMocks())
 
+  test('opens a targeted object and reports a stale target', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/objects')) return jsonResponse([objectRow])
+      return jsonResponse([])
+    })
+    const { rerender } = render(<ObjectsPage targetId={1} />)
+    expect(await screen.findByText('Карточка объекта')).toBeTruthy()
+    rerender(<ObjectsPage targetId={999999} />)
+    expect(await screen.findByText('Запись не найдена')).toBeTruthy()
+  })
+
   test('creates a gym object and opens its card with contract and history', async () => {
     let listCalls = 0
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {

@@ -3,9 +3,12 @@ import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from threading import Lock
+from time import monotonic
 from typing import TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -58,6 +61,7 @@ from app.contracts import (
     serialize_inspection,
     serialize_period,
 )
+from app.day_action_plan import build_action_plan
 from app.db import create_app_engine
 from app.document_packages import (
     DocumentTemplateError,
@@ -89,7 +93,7 @@ from app.inventory import (
 from app.lead_dictionaries import LEAD_SOURCES, source_from_utm
 from app.lead_parser import parse_amount_note, parse_order_text
 from app.marketing_metrics import MARKETING_CHANNELS, marketing_metrics
-from app.master_workflow import PERFORMERS
+from app.master_workflow import PERFORMERS, moscow_today
 from app.models import (
     ChemicalUsage,
     Client,
@@ -139,6 +143,7 @@ from app.security.pii import (
 from app.security.pii_retention import RetentionWorker
 from app.security.tg_auth import (
     AuthenticationError,
+    AuthRole,
     RoleConfigurationError,
     authenticate_init_data,
     clear_session,
@@ -146,6 +151,7 @@ from app.security.tg_auth import (
     principal_from_request,
     require_owner,
     require_reveal_access,
+    signed_session_role,
 )
 from app.tg_poller import poller_started, start_poller
 from app.transaction_categories import categories_router, category_titles
@@ -159,6 +165,11 @@ DOCUMENT_PROFILE_PATH = DOCUMENT_OUTPUT_ROOT / "company-profile.json"
 DOCUMENT_TEMPLATE_DIR = Path(__file__).parents[2] / "docs" / "templates"
 
 engine = create_app_engine(DATABASE_URL)
+_action_plan_cache: dict[
+    tuple[object, str, date, bool], tuple[float, dict[str, object]]
+] = {}
+_action_plan_cache_lock = Lock()
+_ACTION_PLAN_TTL_SECONDS = 300
 
 
 @asynccontextmanager
@@ -2584,6 +2595,35 @@ def bank_confirm(payload: BankConfirmIn):
         credit_reconciled=credit_parts == credit_total,
         debit_reconciled=debit_parts == debit_total,
     )
+
+
+@app.get("/api/day/action-plan")
+def get_day_action_plan(
+    request: Request, include_all: bool = Query(default=False, alias="all")
+) -> dict[str, object]:
+    role = signed_session_role(request)
+    if role is None:
+        raise HTTPException(status_code=401, detail="Требуется вход через Telegram")
+    if role not in ("owner", "master"):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    authorized_role: AuthRole = "owner" if role == "owner" else "master"
+    today = moscow_today()
+    cache_key = (engine, role, today, include_all)
+    now = monotonic()
+    with _action_plan_cache_lock:
+        cached = _action_plan_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _ACTION_PLAN_TTL_SECONDS:
+            return deepcopy(cached[1])
+    with Session(engine) as session:
+        result = build_action_plan(
+            session, authorized_role, today, include_all=include_all
+        )
+    with _action_plan_cache_lock:
+        for key, (created_at, _) in list(_action_plan_cache.items()):
+            if now - created_at >= _ACTION_PLAN_TTL_SECONDS:
+                del _action_plan_cache[key]
+        _action_plan_cache[cache_key] = (now, deepcopy(result))
+    return result
 
 
 @app.get("/api/day")
